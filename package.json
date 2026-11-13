@@ -1,0 +1,83 @@
+{
+  "name": "xlsx2pdf",
+  "version": "1.0.0",
+  "description": "Excel template → high-fidelity PDF for Node.js. Design in Excel, inject data; merged cells, rich text & numFmt preserved. Built-in headless Chrome. Apache-2.0.",
+  "author": "royhatsune <royhatsune@gmail.com>",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json",
+    "./internal/*": "./src/*.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "scripts/browser-install-lib.mjs",
+    "scripts/install-browser.mjs",
+    "index.d.ts",
+    "LICENSE",
+    "README.zh-CN.md"
+  ],
+  "bin": {
+    "xlsx2pdf-browser": "scripts/install-browser.mjs"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "redline": "node scripts/redline-scan.mjs",
+    "prepublishOnly": "npm run build && npm run redline",
+    "browser:install": "node scripts/install-browser.mjs",
+    "postinstall": "node scripts/install-browser.mjs",
+    "test": "node test/smoke.mjs",
+    "test:cjs": "node test/smoke.cjs",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@puppeteer/browsers": "^3.2.0",
+    "axios": "^1.9.0",
+    "exceljs": "^4.4.0",
+    "puppeteer-core": "24.7.2"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.5.3",
+    "@commitlint/config-conventional": "^20.5.3",
+    "esbuild": "^0.24.0",
+    "husky": "^9.1.7"
+  },
+  "directories": {
+    "test": "test"
+  },
+  "keywords": [
+    "excel",
+    "xlsx",
+    "pdf",
+    "excel-to-pdf",
+    "xlsx-to-pdf",
+    "template",
+    "headless-chrome",
+    "puppeteer"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krstation-open/xlsx2pdf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/krstation-open/xlsx2pdf/issues"
+  },
+  "homepage": "https://github.com/krstation-open/xlsx2pdf#readme"
+}

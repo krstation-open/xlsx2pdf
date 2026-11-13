@@ -1,0 +1,7 @@
+node_modules/
+dist/
+browsers/
+
+# 本地验证产物
+*.tgz
+test/output/
