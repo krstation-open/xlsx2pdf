@@ -12,6 +12,8 @@ import {
   lookupMarkerType,
   listMarkerTypes,
 } from './registry.js';
+import { imageLikeHandler } from './markers.js';
+import { normalizeImageSizes } from './image.js';
 
 // 列宽度量基准 MDW：核心按公开常数 7（Calibri 11pt）换算；
 // 按字体/字号精确取值的增强实现由商业版经 seams.resolveMdw 注入
@@ -691,8 +693,10 @@ export async function processTemplate(templateSource, data, option = {}) {
     }
   }
 
-  // 5. 压缩嵌入图片（商业版接缝：缩至显示尺寸 + 格式转换；核心缺省不处理）
+  // 5. 嵌入图片尺寸归一/压缩：商业版接缝（sharp 缩至显示尺寸 + 格式转换 + DPI 归一）优先；
+  // 未注入时核心以纯 JS image-size 兜底归一（@96DPI、不压缩），保证未设宽高的图可见
   if (seams.optimizeImages) await seams.optimizeImages(cells, columnWidths, rowHeights);
+  else await normalizeImageSizes(cells);
 
   let model = {
     columnCount,
@@ -941,8 +945,12 @@ function textHandler(value, option, ctx) {
   return value ?? '';
 }
 
-// 核心仅注册 text；image/img/barcode/qrcode/watermark 等增强类型
-// 由商业版经内部注册表（xlsx2pdf/internal/registry）注入
+// 核心内置 text + image/img/barcode/qrcode（富媒体基础形态，社区版可用）；
+// watermark 等其余增强类型由商业版经内部注册表（xlsx2pdf/internal/registry）注入
 registerBuiltinMarkerTypes({
   text: textHandler,
+  image: imageLikeHandler,
+  img: imageLikeHandler,
+  barcode: imageLikeHandler,
+  qrcode: imageLikeHandler,
 });

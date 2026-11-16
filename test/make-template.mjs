@@ -89,7 +89,7 @@ export async function makeTemplates(outDir) {
   }
   await wb.xlsx.writeFile(basic);
 
-  // ============ Pro 标记模板（image 标记 → 应抛 Pro 引导错误） ============
+  // ============ 富媒体标记模板（image 标记，社区版内置） ============
   const wb2 = new ExcelJS.Workbook();
   const ws2 = wb2.addWorksheet('Pro');
   ws2.getCell('A1').value = '${photo|image_w100}';

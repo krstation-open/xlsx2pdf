@@ -34,6 +34,7 @@ npm run build      # esbuild 双产物（ESM/CJS）
 npm run redline    # 红线扫描（必须零命中）
 npm test           # ESM 冒烟
 npm run test:cjs   # CJS 冒烟
+npm run test:media # 富媒体守卫（image/barcode/qrcode + 浮层 + 尺寸归一）
 ```
 
 PDF 相关测试需要浏览器：`configure({ browserPath })` 或环境变量

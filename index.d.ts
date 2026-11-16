@@ -1,8 +1,9 @@
 /**
  * xlsx2pdf 类型声明（社区版）
  *
- * 社区版 API 面：单页对象数据 + 精简 option + 自定义扩展（use/plugins/标记语法）。
- * 商业版 Pro 能力（数组批量/富媒体标记/自适应/精确缩放等）传入时运行时抛引导错误。
+ * 社区版 API 面：单页对象数据 + 精简 option + 自定义扩展（use/plugins/标记语法）
+ * + 内置富媒体基础标记（image/img/barcode/qrcode）。
+ * 商业版 Pro 能力（数组批量/watermark/自适应/精确缩放/护栏等）传入时运行时抛引导错误。
  */
 
 /// <reference types="node" />
@@ -143,6 +144,10 @@ export const helpers: {
   validateMarkerRegex(regex: RegExp): void;
   /** 按 Excel 数字格式渲染值（与 numFmt 自动继承同一实现） */
   formatValue(value: unknown, fmt?: string): string;
+  /** 条码/二维码文本 → base64 Data URL */
+  generateCode(type: 'barcode' | 'qrcode', text: string, opts?: { width?: number; height?: number }): Promise<string>;
+  /** Buffer → base64 Data URL */
+  bufferToDataUrl(buffer: Buffer, extension: string): string;
 };
 
 // ============================================================

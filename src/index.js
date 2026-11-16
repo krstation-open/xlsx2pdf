@@ -28,6 +28,7 @@ import { getSeams, hasCapability } from './seams.js';
 import { use } from './registry.js';
 import { flattenObject, getFileBuffer, parseMarkerOption, validateMarkerRegex } from './utils.js';
 import { formatValue } from './numfmt.js';
+import { generateCode, bufferToDataUrl } from './barcode.js';
 
 /** 商业版 Pro 能力咨询方式（统一文案，见 README「社区版 vs Pro」） */
 const PRO_CONTACT = '商业版咨询：business@krstation.com';
@@ -294,6 +295,10 @@ export const helpers = {
   validateMarkerRegex,
   /** 按 Excel 数字格式渲染值（与 numFmt 自动继承同一实现）：formatValue(value, fmt) */
   formatValue,
+  /** 条码/二维码文本 → base64 Data URL：generateCode('barcode'|'qrcode', text, { width, height }) */
+  generateCode,
+  /** Buffer → base64 Data URL：bufferToDataUrl(buffer, extension) */
+  bufferToDataUrl,
 };
 
 export { configure, ensureBrowser, closeBrowser, use };

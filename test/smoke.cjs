@@ -56,8 +56,15 @@ const DATA = {
     assert.strictEqual(typeof helpers.flattenObject, 'function', 'CJS helpers 导出');
     console.log('  ✓ CJS 自定义扩展');
 
+    // 2.6 富媒体基础（社区版内置 image）
+    const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const media = await excel2html({ template: tpl.proMarker, data: { photo: PNG } });
+    assert.ok(media.html.includes('<img'), 'CJS image 标记嵌入');
+    assert.strictEqual(typeof helpers.generateCode, 'function', 'CJS helpers.generateCode 导出');
+    console.log('  ✓ CJS 富媒体基础');
+
     // 3. getVersion
-    assert.strictEqual(getVersion(), '0.1.0');
+    assert.strictEqual(getVersion(), require('../package.json').version);
     console.log('  ✓ CJS getVersion');
 
     // 4. excel2pdf 全链路（需浏览器；缺失时跳过）

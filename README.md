@@ -36,6 +36,7 @@ xlsx2pdf compresses the pipeline to two steps — "design template → inject da
 - ✅ Custom marker syntax: `markerRegex` / `markerSeparator` (per-call or global configure)
 - ✅ ESM / CJS dual mode + TypeScript declarations
 - ✅ Built-in template size / cell-count safety caps, fail fast on abnormally large templates
+- ✅ Built-in rich-media markers: `image`/`img` (local path / http(s) URL / base64 DataUrl), `barcode` (Code128), `qrcode`; overlay params (`w/h/offset/zIndex/opacity`); unset size auto-normalized to original dimensions
 
 ## Install
 
@@ -83,6 +84,10 @@ ${field|text}             explicit text
 ${field|text_default:N/A} default text when empty
 ${a.b.c}                  nested object dot path
 ${temp}℃ / ${humi}%       multiple markers + static text in one cell
+${photo|image_w100_h80}   image (local path / http(s) URL / base64 DataUrl)
+${code|barcode_w120_h40}  Code128 barcode
+${qr|qrcode_w80_h80}      QR code
+${logo|image_zindex2_opacity0.5}  overlay: z-index / opacity / offset
 ```
 
 A cell can hold any number of markers freely mixed with static text, each substituted independently; give a marker segment its own bold / color / size in Excel (local rich text) and the substituted value inherits that segment's formatting — no parameter keys needed.
@@ -113,7 +118,7 @@ use({
 
 Marker-type handler return contract: `string` → text substitution; `{ images: [{ dataUrl, width?, height?, ... }] }` → image overlay; `{ watermarks: [{ text, opacity?, ... }] }` → text watermark overlay; mixed objects also work; `null/undefined` → clear the marker. Image / watermark overlay parameters align with the commercial edition's same-named markers.
 
-Extension development can reuse engine-homologous utilities: `import { helpers } from 'xlsx2pdf'` provides `getFileBuffer` / `flattenObject` / `parseMarkerOption` / `validateMarkerRegex` / `formatValue` — the same implementation the engine uses internally, so behavior never drifts.
+Extension development can reuse engine-homologous utilities: `import { helpers } from 'xlsx2pdf'` provides `getFileBuffer` / `flattenObject` / `parseMarkerOption` / `validateMarkerRegex` / `formatValue` / `generateCode` / `bufferToDataUrl` — the same implementation the engine uses internally, so behavior never drifts.
 
 ## API
 
@@ -131,18 +136,18 @@ Extension development can reuse engine-homologous utilities: `import { helpers }
 
 ## Community vs Pro
 
-The community edition covers the full "text-report template → PDF" pipeline. These production-grade capabilities are offered in the commercial Pro edition:
+The community edition covers the full "text-report template → PDF" pipeline plus basic rich-media embedding. These production-grade capabilities are offered in the commercial Pro edition:
 
 | Capability                                                    | Community                                  | Pro                                                                                   |
 | ------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------- |
 | Overflow content                                              | native Chrome pagination (may clip / span) | **single-page auto-fit, converges without clipping**                                  |
 | Column-width precision                                        | public-formula approximation               | **pixel-accurate conversion + font-missing guard**                                    |
-| Image / barcode / QR / watermark markers                      | —                                          | ✅ layered / opacity overlays, automatic image compression                            |
+| Image / barcode / QR markers                                | ✅ basic embed + overlay params + size normalize | **+ auto image compression & DPI-aware sizing, autoInsertImage, watermark**       |
 | Array multi-page batch + detail-row syntax                    | —                                          | ✅ hundreds of documents from one template                                            |
 | Custom paper (receipt rolls) direct read                      | —                                          | ✅                                                                                    |
 | Landscape WPS / Clodop print adaptation                       | —                                          | ✅ automatic `/Rotate` rewrite                                                        |
 | Concurrency limiting / memory admission guard                 | fixed single concurrency                   | ✅ parameterized production guardrails                                                |
-| Custom extensions (3 extension points + custom marker syntax) | ✅ use/plugins + basic helpers             | ✅ same mechanism + built-in rich-media marker types & barcode/image advanced helpers |
+| Custom extensions (3 extension points + custom marker syntax) | ✅ use/plugins + built-in rich-media basic types + helpers | ✅ same mechanism + sharp/autoInsert advanced helpers                             |
 | Support                                                       | community issues                           | SLA tickets + dedicated group                                                         |
 
 **Pro consulting / free POC**: send 3 of your real templates; within 48 hours we return Pro output and a benchmark comparison report.

@@ -1,6 +1,6 @@
 {
   "name": "xlsx2pdf",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Excel template → high-fidelity PDF for Node.js. Design in Excel, inject data; merged cells, rich text & numFmt preserved. Built-in headless Chrome. Apache-2.0.",
   "author": "royhatsune <royhatsune@gmail.com>",
   "license": "Apache-2.0",
@@ -40,12 +40,15 @@
     "postinstall": "node scripts/install-browser.mjs",
     "test": "node test/smoke.mjs",
     "test:cjs": "node test/smoke.cjs",
+    "test:media": "node test/media-guard.mjs",
     "prepare": "husky"
   },
   "dependencies": {
     "@puppeteer/browsers": "^3.2.0",
     "axios": "^1.9.0",
+    "bwip-js": "^4.6.0",
     "exceljs": "^4.4.0",
+    "image-size": "^1.1.1",
     "puppeteer-core": "24.7.2"
   },
   "overrides": {

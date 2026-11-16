@@ -37,6 +37,7 @@ xlsx2pdf 把链路压缩为「设计模板 → 注入数据」两步，内置无
 - ✅ 自定义标记语法：`markerRegex` / `markerSeparator`（调用级或全局 configure）
 - ✅ ESM / CJS 双模式 + TypeScript 类型声明
 - ✅ 内置模板体积/单元格数安全上限，异常大模板快速失败
+- ✅ 内置富媒体标记：`image`/`img`（本地路径 / http(s) URL / base64 DataUrl）、`barcode`（Code128）、`qrcode`；浮层参数（`w/h/offset/zIndex/opacity`）；未设宽高按原图尺寸自动归一
 
 ## 安装
 
@@ -85,6 +86,10 @@ ${字段名|text}            显式文本
 ${字段名|text_default:无}  空值时的默认文本
 ${a.b.c}                  嵌套对象点路径取值
 ${temp}℃ / ${humi}%       同格多段标记 + 静态文本混排
+${photo|image_w100_h80}   图片（本地路径 / http(s) URL / base64 DataUrl）
+${code|barcode_w120_h40}  Code128 条形码
+${qr|qrcode_w80_h80}      二维码
+${logo|image_zindex2_opacity0.5}  浮层：层级 / 透明度 / 偏移
 ```
 
 同一单元格可写任意多个标记，与静态文本自由混排，逐段独立替换；在 Excel 里给某段标记
@@ -122,7 +127,7 @@ use({
 `null/undefined` → 清除标记。图片/水印浮层的完整参数与内置行为对齐商业版同名标记。
 
 扩展开发可复用引擎同源工具：`import { helpers } from 'xlsx2pdf'` 提供
-`getFileBuffer` / `flattenObject` / `parseMarkerOption` / `validateMarkerRegex` / `formatValue`，
+`getFileBuffer` / `flattenObject` / `parseMarkerOption` / `validateMarkerRegex` / `formatValue` / `generateCode` / `bufferToDataUrl`，
 与引擎内部同一实现，行为不会漂移。
 
 ## API
@@ -141,18 +146,18 @@ use({
 
 ## 社区版 vs 商业版 Pro
 
-社区版覆盖「文本类报表模板 → PDF」的完整链路。以下生产级能力在商业版 Pro 提供：
+社区版覆盖「文本类报表模板 → PDF」的完整链路及富媒体基础嵌入。以下生产级能力在商业版 Pro 提供：
 
 | 能力                                      | 社区版                            | Pro                                                   |
 | ----------------------------------------- | --------------------------------- | ----------------------------------------------------- |
 | 内容超页                                  | Chrome 原生分页（可能截断/跨页）  | **单页自适应，自动收敛不裁剪**                        |
 | 列宽精度                                  | 公开公式近似                      | **像素级精确换算 + 字体缺失守卫**                     |
-| 图片 / 条码 / 二维码 / 水印标记           | —                                 | ✅ 含层级/透明度浮层、图片自动压缩                    |
+| 图片 / 条码 / 二维码标记                  | ✅ 基础嵌入 + 浮层参数 + 尺寸归一 | **＋ 图片自动压缩与 DPI 感知尺寸、autoInsertImage、水印** |
 | 数组多页批量 + 明细行语法                 | —                                 | ✅ 一份模板出百单                                     |
 | 自定义纸张（小票纸）直读                  | —                                 | ✅                                                    |
 | 横向页 WPS / Clodop 打印适配              | —                                 | ✅ `/Rotate` 自动改写                                 |
 | 并发限流 / 内存准入守卫                   | 固定单并发                        | ✅ 参数化生产护栏                                     |
-| 自定义扩展（三层扩展点 + 自定义标记语法） | ✅ use/plugins + helpers 基础工具 | ✅ 同机制 + 内置富媒体标记类型与条码/图片高级 helpers |
+| 自定义扩展（三层扩展点 + 自定义标记语法） | ✅ use/plugins + 内置富媒体基础类型 + helpers | ✅ 同机制 + sharp/autoInsert 高级 helpers           |
 | 技术支持                                  | 社区 issue                        | SLA 工单 + 专属群                                     |
 
 **商业版咨询 / 免费 POC**：提供你的 3 个真实模板，48 小时内返回 Pro 生成效果与基准对比报告。

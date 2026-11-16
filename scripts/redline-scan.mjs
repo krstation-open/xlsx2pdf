@@ -11,6 +11,9 @@
  *   引导错误携带的 option 键（fontGuard/memoryGuard 等）属公开 API 面。
  * - renderTableFragment/computeRowFlags/registry 属通用渲染/扩展机制，
  *   核心合法持有，不在关键词与禁存文件清单内（接缝架构）。
+ * - 富媒体基础下放后（1.1.0）：bwip-js/image-size 为社区合法依赖，barcode/image/markers
+ *   为核心合法模块；sharp（native 压缩/DPI）仍禁引入核心，改用引入级检测（import/require/
+ *   dependencies），评论提及不拦。
  * - 私有源关键词用「@krstation/」（带斜杠的包作用域前缀）：
  *   公开联系邮箱 business@krstation.com 含 "@krstation" 子串，属有意公开信息。
  * - 本脚本自身持有全部关键词，扫描时排除自身。
@@ -39,9 +42,10 @@ const CODE_KEYWORDS = [
   'admitMemory',
   'markLandscapeRotation',
   'javascript-obfuscator',
-  'bwip',
-  'sharp',
 ];
+
+/** sharp 引入级检测（native 压缩/DPI 归一为商业版独占，核心禁引入；评论提及不拦） */
+const SHARP_IMPORT_RE = /(?:from\s*|require\(\s*)['"]sharp['"]/;
 
 /** 私有分发信息（私有包作用域 / 私有源 / 服务器 / 凭据 / 私有许可证） */
 const PRIVATE_KEYWORDS = [
@@ -61,7 +65,6 @@ const ALL_KEYWORDS = [...CODE_KEYWORDS, ...PRIVATE_KEYWORDS, ...CN_KEYWORDS];
 const FORBIDDEN_FILES = [
   'src/fit.js',
   'src/orientation.js',
-  'src/barcode.js',
   'src/memory.js',
 ];
 
@@ -86,6 +89,11 @@ function scanFile(absPath) {
       }
     });
   }
+  lines.forEach((line, i) => {
+    if (SHARP_IMPORT_RE.test(line)) {
+      hits.push(`${rel}:${i + 1}  禁止引入 sharp（native 压缩为商业版独占）`);
+    }
+  });
 }
 
 function walk(dir) {
@@ -113,6 +121,12 @@ for (const dir of SCAN_DIRS) {
 for (const rel of SCAN_FILES) {
   const abs = path.join(root, rel);
   if (existsSync(abs)) scanFile(abs);
+}
+
+// 3. dependencies 禁含 sharp（native 编译破坏社区零依赖安装卖点）
+const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+if (pkg.dependencies && pkg.dependencies.sharp) {
+  hits.push('package.json  dependencies.sharp 禁止引入核心');
 }
 
 if (hits.length > 0) {

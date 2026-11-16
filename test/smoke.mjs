@@ -8,7 +8,7 @@
  * 运行：node test/smoke.mjs
  */
 import assert from 'node:assert';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { excel2pdf, excel2html, getVersion, closeBrowser, use, helpers, configure } from '../src/index.js';
@@ -28,6 +28,9 @@ const DATA = {
   temp: 25,
   humi: 60,
 };
+
+// 1×1 透明 PNG（image 标记社区版用例）
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 /** 断言抛错且为 Pro 引导文案（含能力说明与咨询方式） */
 async function expectPro(fn, label) {
@@ -78,7 +81,11 @@ try {
   await expectPro(() => excel2html({ template: tpl.basic, data: DATA, option: { fitToPage: true } }), 'option.fitToPage');
   await expectPro(() => excel2html({ template: tpl.basic, data: DATA, option: { scale: 80 } }), 'option.scale');
   await expectPro(() => excel2html({ template: tpl.basic, data: DATA, option: { pageSize: { width: 80, height: 200 } } }), '对象型 pageSize');
-  await expectPro(() => excel2html({ template: tpl.proMarker, data: {} }), 'image 标记');
+  // image 标记已下放社区版：正常嵌入而非 Pro 引导
+  const media = await excel2html({ template: tpl.proMarker, data: { photo: PNG } });
+  assert.ok(media.html.includes('<img'), 'image 标记社区版嵌入');
+  assert.ok(!media.html.includes('${'), 'image 标记清除');
+  console.log('  ✓ image 标记社区版内置嵌入');
   await expectPro(() => excel2html({ template: tpl.detailRow, data: {} }), '#数组.字段 明细行');
 
   // 未知 option 键：快速失败（非 Pro 引导，仅报错）
@@ -141,7 +148,8 @@ try {
   console.log('  ✓ helpers 工具与正则契约校验');
 
   // ============ 3. getVersion ============
-  assert.strictEqual(getVersion(), '0.1.0', 'getVersion 与 package.json 一致');
+  const pkgVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+  assert.strictEqual(getVersion(), pkgVersion, 'getVersion 与 package.json 一致');
   console.log('  ✓ getVersion');
 
   // ============ 4. excel2pdf 全链路（需浏览器） ============
