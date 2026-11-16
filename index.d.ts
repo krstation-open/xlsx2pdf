@@ -2,8 +2,8 @@
  * xlsx2pdf 类型声明（社区版）
  *
  * 社区版 API 面：单页对象数据 + 精简 option + 自定义扩展（use/plugins/标记语法）
- * + 内置富媒体基础标记（image/img/barcode/qrcode）。
- * 商业版 Pro 能力（数组批量/watermark/自适应/精确缩放/护栏等）传入时运行时抛引导错误。
+ * + 内置富媒体基础标记（image/img/barcode/qrcode）+ #数组.字段 明细行索引映射。
+ * 商业版 Pro 能力（数组多页批量/watermark/自适应/精确缩放/护栏等）传入时运行时抛引导错误。
  */
 
 /// <reference types="node" />

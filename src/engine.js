@@ -575,14 +575,9 @@ export async function processTemplate(templateSource, data, option = {}) {
         // 解析字段（处理 # 数组标记）
         let field = marker.field;
         if (field.startsWith('#')) {
-          // #数组.字段 明细行（同一模板按数组逐行展开）为商业版 Pro 能力：
-          // 未注册时显式报错引导，不静默当普通字段渲染
-          if (!hasCapability('detailRows')) {
-            throw new Error(
-              '[xlsx2pdf] 模板中的 #数组.字段 明细行（按数组数据逐行展开）是商业版 Pro 能力，' +
-              '社区版仅支持单页对象数据。商业版咨询：business@krstation.com'
-            );
-          }
+          // #数组.字段 明细行（社区版内置）：索引映射语义——同一标记每出现一次取下一个
+          // 数组下标（arr.0.field、arr.1.field…），行数由模板固定，作者按行重复标记。
+          // 非自动展开循环；数组多页批量（data 传数组）仍为商业版 Pro 能力。
           let idx = arrayIndexMap[field] ?? -1;
           arrayIndexMap[field] = idx + 1;
           field = field.replace(/#([^.]+)\./, `$1.${idx + 1}.`);

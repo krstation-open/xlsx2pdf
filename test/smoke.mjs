@@ -86,7 +86,11 @@ try {
   assert.ok(media.html.includes('<img'), 'image 标记社区版嵌入');
   assert.ok(!media.html.includes('${'), 'image 标记清除');
   console.log('  ✓ image 标记社区版内置嵌入');
-  await expectPro(() => excel2html({ template: tpl.detailRow, data: {} }), '#数组.字段 明细行');
+  // #数组.字段 明细行已下放社区版（索引映射）：重复标记行逐次取数组下标
+  const detail = await excel2html({ template: tpl.detailRow, data: { items: [{ name: '甲' }, { name: '乙' }] } });
+  assert.ok(detail.html.includes('甲') && detail.html.includes('乙'), '#数组.字段 索引映射逐行取值');
+  assert.ok(!detail.html.includes('${'), '明细行标记清除');
+  console.log('  ✓ #数组.字段 明细行社区版内置');
 
   // 未知 option 键：快速失败（非 Pro 引导，仅报错）
   await assert.rejects(

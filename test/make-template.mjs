@@ -95,10 +95,11 @@ export async function makeTemplates(outDir) {
   ws2.getCell('A1').value = '${photo|image_w100}';
   await wb2.xlsx.writeFile(proMarker);
 
-  // ============ 明细行模板（#数组.字段 → 应抛 Pro 引导错误） ============
+  // ============ 明细行模板（#数组.字段 索引映射，社区版内置；重复标记行逐次取下一数组下标） ============
   const wb3 = new ExcelJS.Workbook();
-  const ws3 = wb3.addWorksheet('Pro');
+  const ws3 = wb3.addWorksheet('Detail');
   ws3.getCell('A1').value = '${#items.name}';
+  ws3.getCell('A2').value = '${#items.name}';
   await wb3.xlsx.writeFile(detailRow);
 
   // ============ 扩展插件模板（自定义标记类型 upper + 解析器字段 virt） ============
