@@ -13,9 +13,31 @@ A Node.js server-side library that goes Excel template → marker substitution �
 
 **Official website**: [https://www.krstation.com/](https://www.krstation.com/)
 
+## Contents
+
+- [Quick start](#quick-start)
+- [What it's for](#what-for)
+- [Why xlsx2pdf](#why)
+- [Features (community edition)](#features)
+- [Detailed usage](#usage)
+- [Marker syntax](#markers)
+- [Community vs Pro](#compare)
+- [Deployment](#deploy)
+- [Extensions](#extend)
+- [API](#api)
+- [Known limits and FAQ](#faq)
+- [Maintenance and versioning](#maintenance)
+- [Feedback and Pro](#feedback)
+- [Contributing](#contributing)
+- [License](#license)
+
 ---
 
+<a id="quick-start"></a>
+
 ## Quick start
+
+> The first `npm i` triggers a postinstall download of the bundled Chrome (~150MB, mirror-friendly). On a slow network this can take a while — it isn't stuck. If the server already has Chrome/Chromium, set `browserPath` to skip the download (see [Deployment](#deploy)).
 
 ```bash
 npm i xlsx2pdf
@@ -38,9 +60,9 @@ writeFileSync('out.pdf', pdf);
 
 Merged cells, fonts, backgrounds, borders, number formats and page setup are all preserved.
 
-> postinstall auto-downloads the bundled Chrome (~150MB, mirror-friendly). To reuse an existing Chrome/Chromium: `configure({ browserPath: '/usr/bin/chromium' })`.
-
 ---
+
+<a id="what-for"></a>
 
 ## What it's for
 
@@ -56,30 +78,17 @@ If all you want is to turn any xlsx into a PDF as-is, LibreOffice or a dedicated
 
 ---
 
-## How it compares to options in other languages
+<a id="why"></a>
 
-People often ask whether Python or Java has something equivalent. I looked around; here's roughly what's out there:
+## Why xlsx2pdf
 
-| Language | Common open-source options | What's missing |
-| :--- | :--- | :--- |
-| Python | openpyxl + reportlab/WeasyPrint, libreoffice-convert | no Chrome-consistent Excel-template marker engine |
-| Java | Apache POI (no PDF), JasperReports (template ≠ Excel) | template not Excel, or no PDF |
-| Go | excelize (no PDF), chromedp + hand-drawing | no template→PDF fidelity engine |
-| .NET | ClosedXML/EPPlus + hand-drawing | open-source slot empty |
-| PHP | PhpSpreadsheet + Dompdf/mPDF | poor Excel fidelity |
+A few things I value about it: the template is just plain Excel, so business users don't have to learn a new tool; nothing native to compile and no Office dragged in on install; rendering goes through Chrome, so output is consistent across Windows / Linux / macOS; the fiddly bits that usually break — merged cells, rich text, numFmt — are handled and tested; and marker types, field resolvers and model hooks are all extensible.
 
-Basically the open-source choices in other languages fall into four groups: LibreOffice-based (heavy, awkward to run concurrently), hand-drawn PDF or a custom HTML engine (poor Excel fidelity), pure xlsx read/write libraries (no PDF at all), and report engines whose template isn't Excel. The ones with genuinely high fidelity are mostly commercial closed-source engines like Aspose or Spire — paid, and not light.
-
-xlsx2pdf aims at the gap in between: open source, no native modules to compile on install, no Office dragged in, consistent Chrome output across platforms, the template is just Excel, and it's extensible. The fiddly bits that usually break — merged cells, rich text, numFmt — are handled and tested.
-
-Two things worth being upfront about, so expectations line up:
-
-- On fidelity, community column width uses a public-formula approximation; a commercial native engine may render an arbitrary xlsx more accurately. What really widens the precision gap is Pro's pixel-accurate column width and single-page auto-fit.
-- The route itself isn't secret — every language has Chrome/CDP bindings, so others can build it too. Our edge is doing the details thoroughly, plus Pro's precision and production guardrails, not some unique trick.
-
-Also, it's just a Node.js library. To use it from another language, run a small Node service and call it over HTTP, or hang a Node sidecar off your app.
+I should also be clear about the community edition's limits: column width uses a public-formula approximation, and for layouts that are extremely precision-sensitive, Pro offers pixel-accurate column width and single-page auto-fit. It's just a Node.js library — to use it from another language, run a small Node service and call it over HTTP, or hang a Node sidecar off your app.
 
 ---
+
+<a id="features"></a>
 
 ## Features (community edition)
 
@@ -98,11 +107,13 @@ Also, it's just a Node.js library. To use it from another language, run a small 
 
 ---
 
+<a id="usage"></a>
+
 ## Detailed usage
 
 ### 1. Design the template
 
-Lay out the report in Excel and write markers where dynamic data goes:
+Lay out the document in Excel and put markers where dynamic data goes:
 
 | Cell | Content |
 | :--- | :--- |
@@ -113,27 +124,29 @@ Lay out the report in Excel and write markers where dynamic data goes:
 | A3 | Remark |
 | B3 | `${remark\|text_default:N/A}` |
 
-### 2. Call
+> The `\|` in the table is just escaping for the Markdown column separator. In an Excel cell you actually write `${remark|text_default:N/A}`, without the backslash. Same for the marker-syntax tables below.
+
+### 2. Call it
 
 ```javascript
 import { excel2pdf } from 'xlsx2pdf';
 
 const { pdf } = await excel2pdf({
   template: './tpl.xlsx',
-  data: { name: 'Alice', amount: 1234.5, remark: 'urgent' },
+  data: { name: 'Zhang San', amount: 1234.5, remark: 'Urgent' },
 });
 ```
 
-If the amount cell uses `¥#,##0.00`, the output shows `¥1,234.50` automatically — number formats need no marker parameters.
+If the amount cell has the `¥#,##0.00` format, the output shows `¥1,234.50` automatically — number formats need no marker params.
 
 ### 3. Output
 
-`pdf` is a Buffer — write to file, return as an HTTP response, or upload to object storage:
+`pdf` is a Buffer: write it to a file, return it as an HTTP response, or upload it to object storage:
 
 ```javascript
 import { writeFileSync } from 'node:fs';
 
-// write to file
+// write to a file
 writeFileSync('out.pdf', pdf);
 
 // Express response
@@ -143,17 +156,19 @@ res.send(pdf);
 
 ---
 
+<a id="markers"></a>
+
 ## Marker syntax
 
 ### Basic placeholders
 
 | Syntax | Meaning |
 | :--- | :--- |
-| `${field}` | basic field (default text type) |
+| `${field}` | basic field (text type by default) |
 | `${field\|text}` | explicit text |
 | `${a.b.c}` | nested object dot path |
 | `${field\|text_default:N/A}` | default text when empty |
-| `${temp}℃ / ${humi}%` | multiple markers + static text in one cell |
+| `${temp}℃ / ${humi}%` | multiple markers + static text mixed in one cell |
 | `${#items.name}` | detail-row index mapping (repeated marker rows take successive array indices) |
 
 ### Rich-media markers (built-in since 1.1.0)
@@ -161,23 +176,23 @@ res.send(pdf);
 | Syntax | Meaning |
 | :--- | :--- |
 | `${photo\|image}` | image (local path / http(s) URL / base64 DataUrl) |
-| `${photo\|image_w100_h80}` | explicit width / height (px) |
+| `${photo\|image_w100_h80}` | explicit width/height (px) |
 | `${code\|barcode_w120_h40}` | Code128 barcode |
 | `${qr\|qrcode_w80_h80}` | QR code |
 | `${logo\|image_zindex2_opacity0.5}` | overlay: z-index / opacity |
 
-Shared parameter keys for image / barcode / qrcode:
+Image / barcode / QR share these parameter keys:
 
 | Key | Meaning |
 | :--- | :--- |
-| `w` / `h` | width / height (px); setting one side derives the other by aspect ratio; setting neither normalizes to original dimensions (@96DPI) |
+| `w` / `h` | width / height (px); setting one side derives the other by aspect ratio; neither set normalizes to original dimensions (@96DPI) |
 | `ox` / `oy` | horizontal / vertical offset (px) |
-| `zindex` | overlay stacking (non-zero does not stretch the row height) |
+| `zindex` | overlay z-index (non-zero does not stretch the row height) |
 | `opacity` | opacity (0~1) |
 
-> Community size normalization is pure-JS probing (no compression); automatic image compression and DPI-aware physical sizing are offered in Pro.
+> Community size normalization is pure-JS probing (no compression); automatic image compression and DPI-aware physical sizing are in Pro.
 
-### Data-structure boundary
+### Data-structure boundaries
 
 The community edition supports **single-record** injection and built-in **#array.field detail-row index mapping**:
 
@@ -188,13 +203,15 @@ data: { name: 'Alice', customer: { city: 'Shanghai' } }
 // ✅ detail rows: repeat ${#items.name} per row in the template; engine takes items.0 / items.1 / items.2…
 data: { items: [{ name: 'A' }, { name: 'B' }] }
 
-// ❌ no dynamic loop that auto-expands one marker row into N rows (row count fixed by template; reserve enough repeated rows)
-// ❌ no multi-page batch via data array (Pro capability)
+// ❌ no dynamic loop auto-expanding one marker row into N rows (row count fixed by template; reserve enough repeated rows)
+// ❌ no multi-page batch via a data array (Pro capability)
 ```
 
-Detail-row count is fixed by the template: excess rows are cleared when data is shorter, and markers are cleared for an empty array. For emitting many pages from one template (`data` as an array), use Pro's array batch. When `data` is omitted, one empty template page is rendered (markers cleared via defaults / empty values).
+Detail-row count is fixed by the template: extra rows are cleared when data is shorter, and markers are cleared for an empty array. To emit many pages from one template (`data` as an array), use Pro's array batch. With `data` omitted, one empty-template page is rendered (markers cleared by default / empty value).
 
 ---
+
+<a id="compare"></a>
 
 ## Community vs Pro
 
@@ -211,32 +228,26 @@ The community edition can take a single text / rich-media report all the way thr
 | Single-page auto-fit (overflow converges to one page, no clipping) | ❌ | ✅ |
 | Column-width precision | public-formula approximation | pixel-accurate conversion + font-missing guard |
 | Custom paper (receipt rolls) direct read | ❌ | ✅ |
-| Landscape WPS / Clodop print adaptation | ❌ | ✅ |
+| Landscape WPS / Clodop (a browser print control) print adaptation | ❌ | ✅ |
 | Concurrency / memory-admission guard | fixed single concurrency | parameterized production guardrails |
 | Custom extensions (3 points + custom syntax) | ✅ | ✅ |
 | License | Apache-2.0, free commercial use | commercial EULA |
 
 The "single-page auto-fit" row deserves a plain explanation: in the community edition, content that overflows goes through native Chrome pagination and may clip or span pages. Pro's single-page auto-fit, when data is too long and would otherwise overflow, automatically adjusts font size and row height to fit everything onto one page — no clipping, no lost data. This matters a lot for "must be one page" cases like shipping labels and fixed invoices.
 
-A few things worth knowing before you use it:
-
-- Overflow goes through native Chrome pagination, so long text may clip or span pages. If it must be one page, look at Pro's single-page auto-fit.
-- Data is single-record injection plus #array.field detail rows (row count fixed by the template). There's no dynamic loop that expands one row into N, and multi-page batch via a data array is in Pro.
-- Fixed single concurrency, fine for single documents and low-frequency generation. For high-concurrency production, weigh Pro's guardrails.
-- Defaults cap templates at 5MB and cells at 20000; beyond that it errors out. Adjusting those caps is in Pro.
-
 **Pro consulting / free POC**: send 3 of your real templates; within 48 hours we return Pro output and a benchmark comparison report. 📧 business@krstation.com
 
 ---
+
+<a id="deploy"></a>
 
 ## Deployment
 
 ### System dependencies
 
-Bundled headless Chrome (~150MB), auto-downloaded on postinstall. Linux servers need Chrome's system libraries: the install script probes missing libs via `ldd` and `apt-get` installs them (requires root or passwordless sudo); without permission it prints the manual command and does not interrupt. Common dependencies:
+Bundled headless Chrome (~150MB), auto-downloaded on postinstall. Linux servers need Chrome's system libraries: the install script probes missing libs via `ldd` and `apt-get` installs them (requires root or passwordless sudo), choosing `libasound2` / `libasound2t64` by distro; without permission it prints the manual command and does not interrupt. Common dependencies (Debian 12 example below; on Ubuntu 24.04 replace `libasound2` with `libasound2t64`):
 
 ```bash
-# Debian / Ubuntu (libasound2 / libasound2t64 chosen by distro version)
 apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
   libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
   libxrandr2 libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libxshmfence1 libasound2
@@ -244,13 +255,17 @@ apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
 
 ### Docker example
 
+The `libasound2` package name differs by distro (Debian 12: `libasound2`; Ubuntu 24.04 / Debian trixie: `libasound2t64`). The fallback below avoids a copy-paste install failure on newer images:
+
 ```dockerfile
 FROM node:20-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
   libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-  libxrandr2 libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libxshmfence1 libasound2 \
+  libxrandr2 libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libxshmfence1 \
+  && (apt-get install -y --no-install-recommends libasound2t64 \
+      || apt-get install -y --no-install-recommends libasound2) \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -281,6 +296,8 @@ configure({ browserPath: '/usr/bin/chromium' });
 
 ---
 
+<a id="extend"></a>
+
 ## Extensions
 
 Three extension points, two registration levels: global `use(plugin)` (process-wide) / per-call `option.plugins` (this generation only, same-name overrides global, avoiding multi-tenant concurrency pollution):
@@ -309,6 +326,8 @@ Extension development can reuse engine-homologous utilities: `import { helpers }
 
 ---
 
+<a id="api"></a>
+
 ## API
 
 | Function | Description |
@@ -321,66 +340,109 @@ Extension development can reuse engine-homologous utilities: `import { helpers }
 | `helpers` | extension-development utility namespace (engine-homologous) |
 | `getVersion()` | current package version |
 
-`option` (community): `pageSize` / `orientation` / `margin` / `defaults` / `plugins` / `markerRegex` / `markerSeparator`.
+### option (community edition)
+
+- `pageSize`: `'A3' | 'A4' | 'A5' | 'B4' | 'B5' | 'letter' | 'legal'`, defaults to the template's pageSetup. Standard paper; custom paper (receipt rolls) is Pro.
+- `orientation`: `'portrait' | 'landscape'`, defaults to the template. Page orientation.
+- `margin`: `{ top?, right?, bottom?, left? }` (mm), merged field by field; when the template sets none, falls back to Excel's built-in defaults (top/bottom 19.1, left/right 17.8).
+- `defaults`: `Record<string, unknown>`, default `{}`. Global per-field fallback values, see example below.
+- `plugins`: `Plugin[]`, default `[]`. Per-call extensions, this generation only, same-name overrides global `use()`.
+- `markerRegex`: `RegExp` (must have `g` flag + capture group 1), defaults to built-in `${...}`. Custom marker matching, takes precedence over configure global.
+- `markerSeparator`: `string`, default `'|'`. The internal "field / type_params" separator, takes precedence over configure global.
+
+`defaults` is a global fallback: when `data` lacks a field and that marker has no `text_default`, the same-named value in `defaults` is used. Resolution order is **data → marker-level `text_default` → `option.defaults`**:
+
+```javascript
+await excel2pdf({
+  template: './tpl.xlsx',
+  data: { name: 'Zhang San' },
+  // remark / amount not provided in data, and no text_default in the template markers → fall back to these
+  option: { defaults: { remark: 'N/A', amount: 0 } },
+});
+```
+
+### configure vs option precedence
+
+`configure()` sets global defaults (module-level singleton); `option` is the per-call override:
+
+- Page setup (pageSize / orientation / margin): per-call option > template pageSetup > Excel built-in defaults;
+- Marker syntax (markerRegex / markerSeparator): per-call option > configure global > built-in defaults;
+- Plugins: per-call `option.plugins` merges with global `use()`, same-name resolved in favor of per-call.
+
+configure keys: `browserPath` (external browser path, takes precedence over bundled and the `XLSX2PDF_BROWSER_PATH` env var), `headless` (default `'new'`), `launchArgs` (extra launch args), `markerRegex` / `markerSeparator` (global marker syntax, pass `null` to restore built-in). After `closeBrowser()`, the next launch rebuilds with the new config.
 
 ---
 
-## Known limits & FAQ
+<a id="faq"></a>
+
+## Known limits and FAQ
 
 **Q: Long text clips or spans pages?**
-Community uses native Chrome pagination; long text may clip or span. Pro offers single-page auto-fit (overflow converges to one page without clipping). In community, reserve enough space in the template or control field length on the business side.
+Community uses native Chrome pagination; long text may clip or span. Reserve enough space in the template, or control field length on the business side.
 
 **Q: Dynamic detail rows?**
-Community ships #array.field index-mapping detail rows: repeat the marker per row in the template and the engine takes successive array indices (row count fixed by template; reserve enough repeated rows). It does not auto-expand one marker row into N rows; for emitting many pages from one template (data array), use Pro's array batch.
+Built-in #array.field index mapping: repeat the marker per row in the template and the engine takes successive array indices; row count is fixed by the template (reserve enough repeated rows). It is not a dynamic loop that expands one row into N.
 
 **Q: Which barcode symbologies?**
-Community ships Code128 (`barcode`) and QR Code (`qrcode`), generated as PNG by bwip-js. More symbologies and automatic image compression are in Pro.
+Built-in Code128 (`barcode`) and QR Code (`qrcode`), generated as PNG by bwip-js.
 
 **Q: Need Office or LibreOffice?**
 No. Bundled headless Chrome rendering, no Office engine dependency.
 
 **Q: Concurrent calls?**
-Community is fixed single concurrency (excess queued). For high concurrency, evaluate Pro guardrails or manage your own queue.
+Fixed single concurrency, excess queued. For high concurrency, manage your own queue.
 
 **Q: Missing fonts?**
-Community relies on Chrome font fallback; glyphs may differ from Excel when a font is missing. Pro offers a font-missing guard (detect + warn / optional strict mode).
+Chrome font fallback handles rendering; glyphs may differ from Excel when a font is missing. Install the fonts your template uses in the container (see [Deployment](#deploy)).
+
+**Q: How do `option.defaults` and `${field|text_default:N/A}` relate?**
+Resolution order: data → marker-level `text_default` → `option.defaults`. The former is a per-marker fallback, the latter a global per-field fallback with lower priority.
 
 ---
 
-## Maintenance & versioning
+<a id="maintenance"></a>
 
-We run this library in our own production for business documents. Versions follow SemVer; changes are logged in [CHANGELOG.md](./CHANGELOG.md). The community edition is maintained going forward, and its scope is whatever the comparison table above says.
+## Maintenance and versioning
+
+We run this library in our own production for inspection / receipt-style business documents, and it has been running stably for months. Versions follow SemVer; changes are logged in [CHANGELOG.md](./CHANGELOG.md). The community edition is maintained going forward, and its scope is whatever the comparison table above says.
 
 ---
 
-## Feedback & Pro
+<a id="feedback"></a>
+
+## Feedback and Pro
 
 - Issues / feature requests: [GitHub Issues](https://github.com/krstation-open/xlsx2pdf/issues)
 - Pro consulting / free POC: 📧 business@krstation.com
-- Website: [https://www.krstation.com/](https://www.krstation.com/)
+- Official website: [https://www.krstation.com/](https://www.krstation.com/)
 
 ---
 
+<a id="contributing"></a>
+
 ## Contributing
 
-Issues and PRs welcome. Sign the CLA before submitting a PR (see [CONTRIBUTING.md](./CONTRIBUTING.md)). Pro's proprietary technology is out of scope for this repository; related implementation contributions are not accepted.
+Issues and PRs welcome. Please sign the CLA before submitting a PR (see [CONTRIBUTING.md](./CONTRIBUTING.md)). Pro's proprietary technology is out of scope for this repository, and contributions implementing it are not accepted.
 
-Repository: `https://github.com/krstation-open/xlsx2pdf.git`. Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) (husky `commit-msg` + commitlint), format `<type>(<scope>): <subject>`, header ≤ 100 characters.
+Repository: `https://github.com/krstation-open/xlsx2pdf.git`. Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) (enforced by husky `commit-msg` + commitlint), format `<type>(<scope>): <subject>`, header ≤ 100 characters.
 
-Local dev flow:
+Local development:
 
 ```bash
 npm run build      # esbuild dual output (ESM/CJS)
 npm run redline    # red-line scan (must be zero hits)
 npm test           # ESM smoke
 npm run test:cjs   # CJS smoke
-npm run test:media # rich-media guard (image/barcode/qrcode + overlay + size normalize)
+npm run test:media # rich-media guard (image/barcode/qrcode + overlay + size normalization)
+npm run test:detail # detail-row guard (index mapping + nested + numFmt + full pipeline)
 ```
 
 ---
+
+<a id="license"></a>
 
 ## License
 
 [Apache-2.0](./LICENSE) © 恺睿（深圳）软件科技有限公司
 
-The community edition is free for commercial use. Pro is a separate closed-source product under a commercial EULA, unrelated to this repository's code.
+The community edition is free for commercial use. Pro is a separate closed-source product under a commercial EULA, unrelated to the code in this repository.

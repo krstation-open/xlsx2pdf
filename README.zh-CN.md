@@ -13,9 +13,31 @@
 
 **官网 / Official website**: [https://www.krstation.com/](https://www.krstation.com/)
 
+## 目录
+
+- [快速开始](#quick-start)
+- [它适合做什么](#what-for)
+- [为什么用 xlsx2pdf](#why)
+- [特性（社区版）](#features)
+- [详细用法](#usage)
+- [标记语法](#markers)
+- [社区版 vs Pro 版](#compare)
+- [部署](#deploy)
+- [扩展与二次开发](#extend)
+- [API](#api)
+- [已知限制与 FAQ](#faq)
+- [维护与版本](#maintenance)
+- [反馈与商业版](#feedback)
+- [贡献](#contributing)
+- [License](#license)
+
 ---
 
+<a id="quick-start"></a>
+
 ## 快速开始
+
+> 首次 `npm i` 会触发 postinstall 下载内置 Chrome（约 150MB，国内走 npmmirror 镜像），网络慢时可能要等一会儿，不是卡死。服务器已有 Chrome/Chromium 的话，可配 `browserPath` 跳过下载（见[部署](#deploy)）。
 
 ```bash
 npm i xlsx2pdf
@@ -38,9 +60,9 @@ writeFileSync('out.pdf', pdf);
 
 合并单元格、字体、背景、边框、数字格式、页面设置，全部保留。
 
-> postinstall 自动下载内置 Chrome（约 150MB，国内走 npmmirror 镜像）。服务器已有 Chrome/Chromium 时可复用：`configure({ browserPath: '/usr/bin/chromium' })`。
-
 ---
+
+<a id="what-for"></a>
 
 ## 它适合做什么
 
@@ -56,30 +78,17 @@ writeFileSync('out.pdf', pdf);
 
 ---
 
-## 和其他语言方案的比较
+<a id="why"></a>
 
-常有人问 Python / Java 里有没有现成的同类库。我查了一圈，大致是这样：
+## 为什么用 xlsx2pdf
 
-| 语言 | 常见开源方案 | 差在哪 |
-| :--- | :--- | :--- |
-| Python | openpyxl + reportlab/WeasyPrint、libreoffice-convert | 无 Chrome 一致的 Excel 模板标记引擎 |
-| Java | Apache POI（无 PDF）、JasperReports（模板≠Excel） | 模板非 Excel 或无 PDF |
-| Go | excelize（无 PDF）、chromedp + 手绘 | 无模板→PDF 保真引擎 |
-| .NET | ClosedXML/EPPlus + 手绘 | 开源侧缺位 |
-| PHP | PhpSpreadsheet + Dompdf/mPDF | Excel 保真差 |
+几个我自己看重的点：模板就是普通 Excel，业务人员不用学新工具；装的时候不编译 native 模块、不拖 Office；渲染走 Chrome，Win / Linux / macOS 出片一致；合并格、富文本、numFmt 这些容易翻车的细节都处理并测过了；标记类型、字段解析、模型钩子三层都能扩展。
 
-归纳一下，其他语言的开源选择基本就四类：拖 LibreOffice 的（重、并发不好做）、自己手绘 PDF 或用自有 HTML 引擎的（对 Excel 还原差）、纯读写 xlsx 的（压根不出 PDF）、以及模板不是 Excel 的报表引擎。还原度真正高的，多半是 Aspose、Spire 这类商业闭源引擎，付费且不轻。
-
-xlsx2pdf 想填的就是中间这块：开源、装的时候不编译 native 模块、不拖 Office、Chrome 在各平台出片一致、模板就是 Excel、还能扩展。合并格、富文本、numFmt 这些容易翻车的细节也都处理并测过了。
-
-不过有两点得说清楚，免得期望错位：
-
-- 还原度上，社区版列宽用的是公开公式近似，商业 native 引擎对任意 xlsx 的还原可能比它更准。真正拉开精度差距的是 Pro 的像素级列宽和单页自适应。
-- 这条路线本身不神秘，各语言都有 Chrome/CDP 绑定，别人也能搭。我们的优势是把细节做完整、加上 Pro 的精度和生产护栏，不是什么独门绝技。
-
-另外它就是个 Node.js 库。别的语言想用，要么起个 Node 服务走 HTTP 调，要么挂个 Node 侧车。
+也得说清楚社区版的限度：列宽用的是公开公式近似，对排版精度要求极高的场景，Pro 提供像素级列宽和单页自适应。它就是个 Node.js 库，别的语言想用，可以起个 Node 服务走 HTTP 调，或挂个 Node 侧车。
 
 ---
+
+<a id="features"></a>
 
 ## 特性（社区版）
 
@@ -98,6 +107,8 @@ xlsx2pdf 想填的就是中间这块：开源、装的时候不编译 native 模
 
 ---
 
+<a id="usage"></a>
+
 ## 详细用法
 
 ### 1. 设计模板
@@ -112,6 +123,8 @@ xlsx2pdf 想填的就是中间这块：开源、装的时候不编译 native 模
 | B2 | `${amount}` |
 | A3 | 备注 |
 | B3 | `${remark\|text_default:无}` |
+
+> 表格里的 `\|` 只是 Markdown 表格分隔符的转义。Excel 单元格里实际写 `${remark|text_default:无}`，不带反斜杠。下文标记语法表同理。
 
 ### 2. 调用
 
@@ -142,6 +155,8 @@ res.send(pdf);
 ```
 
 ---
+
+<a id="markers"></a>
 
 ## 标记语法
 
@@ -196,6 +211,8 @@ data: { items: [{ name: '甲' }, { name: '乙' }] }
 
 ---
 
+<a id="compare"></a>
+
 ## 社区版 vs Pro 版
 
 社区版能独立把单份文本 / 富媒体报表从头到尾做完，不是砍了功能的试用版。Pro 主要解决批量、高并发、以及对排版精度特别敏感的生产场景。两者用的是同一套渲染管线。
@@ -211,32 +228,26 @@ data: { items: [{ name: '甲' }, { name: '乙' }] }
 | 单页自适应（内容溢出自动收敛回一页、不裁剪） | ❌ | ✅ |
 | 列宽精度 | 公开公式近似 | 像素级精确换算 + 缺字体守卫 |
 | 自定义纸张（小票卷纸）直读 | ❌ | ✅ |
-| 横向页 WPS / Clodop 打印适配 | ❌ | ✅ |
+| 横向页 WPS / Clodop（浏览器打印控件）打印适配 | ❌ | ✅ |
 | 并发渲染 / 内存准入守卫 | 固定单并发 | 参数化生产护栏 |
 | 自定义扩展（三扩展点 + 自定义语法） | ✅ | ✅ |
 | 许可 | Apache-2.0，免费商用 | 商业 EULA |
 
 表里的「单页自适应」单独解释一下：社区版内容超页时走 Chrome 原生分页，可能截断或跨页；Pro 的单页自适应会在数据过长、本来要超页时，自动调整字号与行高，把内容完整收敛到一页内，不裁剪、不丢数据。打印快递单、固定发票这类「必须一页」的场景尤其关键。
 
-用之前有几点最好知道：
-
-- 内容溢出走 Chrome 原生分页，长文本可能截断或跨页。要求必须单页输出的话，看 Pro 的单页自适应。
-- 数据是单记录注入 + #数组.字段 明细行（行数由模板固定）。没有「一行自动展开 N 行」的动态循环，data 传数组的多页批量也在 Pro。
-- 固定单并发，适合单份、低频生成。要高并发上生产，评估下 Pro 的护栏。
-- 默认模板 ≤ 5MB、单元格 ≤ 20000，超了直接报错。想调这些上限在 Pro。
-
 **Pro 咨询 / 免费 POC**：提供你的 3 个真实模板，48 小时内返回 Pro 生成效果与基准对比报告。📧 business@krstation.com
 
 ---
+
+<a id="deploy"></a>
 
 ## 部署
 
 ### 系统依赖
 
-内置 Headless Chrome（约 150MB），postinstall 自动下载。Linux 服务器需 Chrome 运行系统库：安装脚本会用 `ldd` 自动探测缺失库并 `apt-get` 安装（需 root 或免密 sudo）；无权限时打印手动安装命令，不中断流程。常见依赖：
+内置 Headless Chrome（约 150MB），postinstall 自动下载。Linux 服务器需 Chrome 运行系统库：安装脚本会用 `ldd` 自动探测缺失库并 `apt-get` 安装（需 root 或免密 sudo），其中 `libasound2` / `libasound2t64` 按发行版自动选择；无权限时打印手动安装命令，不中断流程。常见依赖（下为 Debian 12 示例，Ubuntu 24.04 把 `libasound2` 换成 `libasound2t64`）：
 
 ```bash
-# Debian / Ubuntu（按发行版版本自动选择 libasound2 / libasound2t64）
 apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
   libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
   libxrandr2 libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libxshmfence1 libasound2
@@ -244,13 +255,17 @@ apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
 
 ### Docker 示例
 
+`libasound2` 在不同发行版包名不同（Debian 12 为 `libasound2`，Ubuntu 24.04 / Debian trixie 为 `libasound2t64`），下面做了 fallback，避免照抄在新镜像上装失败：
+
 ```dockerfile
 FROM node:20-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
   libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-  libxrandr2 libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libxshmfence1 libasound2 \
+  libxrandr2 libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libxshmfence1 \
+  && (apt-get install -y --no-install-recommends libasound2t64 \
+      || apt-get install -y --no-install-recommends libasound2) \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -281,6 +296,8 @@ configure({ browserPath: '/usr/bin/chromium' });
 
 ---
 
+<a id="extend"></a>
+
 ## 扩展与二次开发
 
 三个扩展点，两级注册：全局 `use(plugin)`（进程内生效）/ 调用级 `option.plugins`（仅本次生成，同名覆盖全局，避免多租户并发污染）：
@@ -309,6 +326,8 @@ use({
 
 ---
 
+<a id="api"></a>
+
 ## API
 
 | 函数 | 说明 |
@@ -321,37 +340,75 @@ use({
 | `helpers` | 扩展开发工具命名空间（引擎同源） |
 | `getVersion()` | 当前包版本 |
 
-`option`（社区版）：`pageSize` / `orientation` / `margin` / `defaults` / `plugins` / `markerRegex` / `markerSeparator`。
+### option 参数（社区版）
+
+- `pageSize`：`'A3' | 'A4' | 'A5' | 'B4' | 'B5' | 'letter' | 'legal'`，默认取模板 pageSetup。标准纸张；自定义纸张（小票卷纸）为 Pro。
+- `orientation`：`'portrait' | 'landscape'`，默认取模板。页面方向。
+- `margin`：`{ top?, right?, bottom?, left? }`（单位 mm），逐字段合并；模板未设时兜底 Excel 内建默认（上下 19.1 / 左右 17.8）。
+- `defaults`：`Record<string, unknown>`，默认 `{}`。全局字段兜底值，见下方示例。
+- `plugins`：`Plugin[]`，默认 `[]`。调用级扩展，仅本次生成生效，同名覆盖全局 `use()`。
+- `markerRegex`：`RegExp`（须 `g` 标志 + 捕获组 1），默认内置 `${...}`。自定义标记匹配规则，优先于 configure 全局。
+- `markerSeparator`：`string`，默认 `'|'`。标记内「字段 / 类型_参数」分隔符，优先于 configure 全局。
+
+`defaults` 是全局兜底：当 `data` 缺某字段、且该标记没写 `text_default` 时，用 `defaults` 里的同名值。取值顺序为 **data → 标记内 `text_default` → `option.defaults`**：
+
+```javascript
+await excel2pdf({
+  template: './tpl.xlsx',
+  data: { name: '张三' },
+  // remark、amount 未在 data 中提供，且模板标记没写 text_default 时按此兜底
+  option: { defaults: { remark: '无', amount: 0 } },
+});
+```
+
+### configure 与 option 的优先级
+
+`configure()` 设全局默认（模块级单例），`option` 是调用级覆盖：
+
+- 页面设置（pageSize / orientation / margin）：调用级 option > 模板 pageSetup > Excel 内建默认；
+- 标记语法（markerRegex / markerSeparator）：调用级 option > configure 全局 > 内置默认；
+- 插件：调用级 `option.plugins` 与全局 `use()` 合并，同名以调用级为准。
+
+configure 可配项：`browserPath`（外部浏览器路径，优先于内置与环境变量 `XLSX2PDF_BROWSER_PATH`）、`headless`（默认 `'new'`）、`launchArgs`（追加启动参数）、`markerRegex` / `markerSeparator`（全局标记语法，传 `null` 恢复内置）。`closeBrowser()` 后下次启动按新配置重建。
 
 ---
+
+<a id="faq"></a>
 
 ## 已知限制与 FAQ
 
 **Q：长文本会截断或跨页怎么办？**
-社区版采用原生 Chrome 分页，长文本可能截断或跨页。Pro 版提供单页自适应（内容溢出自动收敛回一页、不裁剪）。社区版建议在模板设计时预留足够空间，或由业务侧控制字段长度。
+社区版走 Chrome 原生分页，长文本可能截断或跨页。建议在模板设计时预留足够空间，或由业务侧控制字段长度。
 
 **Q：支持明细行动态扩展吗？**
-社区版内置 #数组.字段 索引映射明细行：模板按行重复标记，引擎逐次取数组下标（行数由模板固定，需预留足够重复行）。不支持「一行自动展开 N 行」的动态循环；如需一份模板批量出多页（data 传数组），请使用 Pro 版数组批量。
+内置 #数组.字段 索引映射：模板按行重复标记，引擎逐次取数组下标，行数由模板固定（需预留足够重复行）。不是「一行自动展开 N 行」的动态循环。
 
 **Q：条形码支持哪些码制？**
-社区版内置 Code128（`barcode`）与 QR Code（`qrcode`），由 bwip-js 生成 PNG。更多码制与图片自动压缩在 Pro 版提供。
+内置 Code128（`barcode`）与 QR Code（`qrcode`），由 bwip-js 生成 PNG。
 
 **Q：需要安装 Office 或 LibreOffice 吗？**
 不需要。内置 Headless Chrome 渲染，不依赖任何 Office 引擎。
 
 **Q：可以并发调用吗？**
-社区版固定单并发（超限排队）。如需高并发，请评估 Pro 版护栏，或自行管理队列。
+固定单并发，超限排队。高并发场景需自行管理队列。
 
 **Q：字体缺失怎么办？**
-社区版交由 Chrome 字体回退渲染，缺字体时字形可能与 Excel 有差异。Pro 版提供缺字体守卫（检测并告警 / 可选严格模式）。
+交由 Chrome 字体回退渲染，缺字体时字形可能与 Excel 有差异。建议容器里装好模板所用字体（见[部署](#deploy)）。
+
+**Q：`option.defaults` 和 `${field|text_default:无}` 什么关系？**
+取值顺序 data → 标记内 `text_default` → `option.defaults`。前者是单个标记的兜底，后者是全局字段兜底，优先级更低。
 
 ---
+
+<a id="maintenance"></a>
 
 ## 维护与版本
 
-这个库在我们自己的生产环境里跑业务单据。版本按 SemVer 走，改动记在 [CHANGELOG.md](./CHANGELOG.md)。社区版会持续维护，能力范围以上面的对照表为准。
+这个库在我们自己的生产环境里跑检测 / 票据类业务单据，已稳定运行数月。版本按 SemVer 走，改动记在 [CHANGELOG.md](./CHANGELOG.md)。社区版会持续维护，能力范围以上面的对照表为准。
 
 ---
+
+<a id="feedback"></a>
 
 ## 反馈与商业版
 
@@ -360,6 +417,8 @@ use({
 - 官网：[https://www.krstation.com/](https://www.krstation.com/)
 
 ---
+
+<a id="contributing"></a>
 
 ## 贡献
 
@@ -375,9 +434,12 @@ npm run redline    # 红线扫描（必须零命中）
 npm test           # ESM 冒烟
 npm run test:cjs   # CJS 冒烟
 npm run test:media # 富媒体守卫（image/barcode/qrcode + 浮层 + 尺寸归一）
+npm run test:detail # 明细行守卫（索引映射 + 嵌套 + numFmt + 全链路）
 ```
 
 ---
+
+<a id="license"></a>
 
 ## License
 

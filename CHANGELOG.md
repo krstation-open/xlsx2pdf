@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 - `test/detail-row-guard.mjs` regression guard; `npm run test:detail` script.
 
 ### Changed
-- README (EN/zh-CN) restructured: quickstart, explicit "Excel template → high-fidelity HTML → PDF" pipeline, scope clarification, cross-language competitive positioning (with honest boundaries), corrected capability table (rich media & detail rows now community; `/Rotate`, custom paper, watermark, image compression stay Pro), deployment & safety-cap defaults, real extension API, FAQ.
+- README (EN/zh-CN) restructured: quickstart with first-install Chrome-download notice, explicit "Excel template → high-fidelity HTML → PDF" pipeline, scope clarification, own-advantage positioning (competitor comparison removed), corrected capability table (rich media & detail rows now community; `/Rotate`, custom paper, watermark, image compression stay Pro) with a plain-language single-page auto-fit note and Clodop gloss, table-of-contents, deployment & safety-cap defaults, Docker `libasound2t64` fallback, pipe-escape note for marker tables, full option types/defaults/precedence + `defaults` example, production endorsement, de-duplicated FAQ.
 - Added CHANGELOG.md (shipped with the package).
 
 ## [1.1.0] - 2026-11-16
