@@ -1,6 +1,6 @@
 {
   "name": "xlsx2pdf",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Excel template → high-fidelity PDF for Node.js. Design in Excel, inject data; merged cells, rich text & numFmt preserved. Built-in headless Chrome. Apache-2.0.",
   "author": "royhatsune <royhatsune@gmail.com>",
   "license": "Apache-2.0",
@@ -24,7 +24,8 @@
     "scripts/install-browser.mjs",
     "index.d.ts",
     "LICENSE",
-    "README.zh-CN.md"
+    "README.zh-CN.md",
+    "CHANGELOG.md"
   ],
   "bin": {
     "xlsx2pdf-browser": "scripts/install-browser.mjs"
@@ -41,6 +42,7 @@
     "test": "node test/smoke.mjs",
     "test:cjs": "node test/smoke.cjs",
     "test:media": "node test/media-guard.mjs",
+    "test:detail": "node test/detail-row-guard.mjs",
     "prepare": "husky"
   },
   "dependencies": {
