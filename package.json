@@ -1,6 +1,6 @@
 {
   "name": "xlsx2pdf",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Excel template → high-fidelity PDF for Node.js. Design in Excel, inject data; merged cells, rich text & numFmt preserved. Built-in headless Chrome. Apache-2.0.",
   "author": "royhatsune <royhatsune@gmail.com>",
   "license": "Apache-2.0",
