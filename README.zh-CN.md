@@ -9,6 +9,7 @@
 [![npm](https://img.shields.io/npm/v/xlsx2pdf)](https://www.npmjs.com/package/xlsx2pdf)
 [![downloads](https://img.shields.io/npm/dw/xlsx2pdf)](https://www.npmjs.com/package/xlsx2pdf)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
+[![CI](https://github.com/krstation-open/xlsx2pdf/actions/workflows/ci.yml/badge.svg)](https://github.com/krstation-open/xlsx2pdf/actions/workflows/ci.yml)
 ![node](https://img.shields.io/badge/node-%3E%3D18.17-green)
 
 **官网 / Official website**: [https://www.krstation.com/](https://www.krstation.com/)
@@ -61,6 +62,15 @@ writeFileSync('out.pdf', pdf);
 
 合并单元格、字体、背景、边框、数字格式、页面设置，全部保留。
 
+不想写代码？包里自带 CLI：
+
+```bash
+npx xlsx2pdf convert tpl.xlsx --data '{"name":"Alice"}' --out out.pdf
+# 仅渲染 HTML 预览（不启动浏览器）：加 --html
+```
+
+另有可直接运行的一键示例 `examples/basic.mjs`——源码仓库里执行 `npm run example`，现场生成演示模板并出片 `examples/output/demo.pdf`。
+
 ---
 
 <a id="what-for"></a>
@@ -104,7 +114,7 @@ writeFileSync('out.pdf', pdf);
 - **内置 Headless Chrome**：无需外部 Office 引擎，渲染一致性可控
 - **轻量预览**：`excel2html()` 仅输出 HTML、不启动浏览器，适合预览或二次处理
 - **可扩展**：标记类型、字段解析器、模型钩子三个扩展点，支持自定义 `markerRegex` / `markerSeparator`
-- **工程化**：ESM / CJS 双模式 + TypeScript 声明，内置模板体积 / 单元格数安全上限
+- **工程化**：ESM / CJS 双模式 + TypeScript 声明，内置模板体积 / 单元格数安全上限，稳定错误码 + 双语报错，CLI（`xlsx2pdf convert`）
 
 ---
 
@@ -154,6 +164,25 @@ writeFileSync('out.pdf', pdf);
 res.setHeader('Content-Type', 'application/pdf');
 res.send(pdf);
 ```
+
+### 4. 错误处理
+
+所有失败统一抛 `Xlsx2pdfError`，带稳定错误码 `code`（如 `E_TEMPLATE_MISSING`、`E_DOWNLOAD_TIMEOUT`、`E_BROWSER_NOT_FOUND`）与双语文案（中文在前、英文追加）。全部错误码对照表（逐码原因与修复建议）见 [docs/errors.md](./docs/errors.md)。
+
+```javascript
+import { excel2pdf, Xlsx2pdfError } from 'xlsx2pdf';
+
+try {
+  await excel2pdf({ template: './tpl.xlsx', data });
+} catch (err) {
+  if (err instanceof Xlsx2pdfError) {
+    console.error(err.code); // 跨版本稳定——按码分支，不要匹配文案
+  }
+  throw err;
+}
+```
+
+CLI 失败时打印错误码 + 双语文案 + 文档锚点，并以非零码退出。
 
 ---
 
@@ -435,7 +464,7 @@ configure({ browserPath: '/usr/bin/chromium' });
 | 单元格数 | 20000 | 实际行×列，超限报错（加载前另有流式预检提前拦截） |
 | 渲染并发 | 1     | 同时打开的标签页上限，超限排队                    |
 
-这三项在社区版是固定默认值，不开放参数化；`maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` 等护栏参数化属 Pro 能力，社区版经 option 传入会显式报错引导（configure 则静默忽略，见 [API](#api)）。远程资源（模板 URL / 图片 URL）下载带 30 秒超时与 20MB 体积上限，失败统一抛带 `[xlsx2pdf]` 前缀的中文报错并附 URL。
+这三项在社区版是固定默认值，不开放参数化；`maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` 等护栏参数化属 Pro 能力，社区版经 option 传入会显式报错引导（configure 则静默忽略，见 [API](#api)）。远程资源（模板 URL / 图片 URL）下载带 30 秒超时与 20MB 体积上限，失败统一抛带稳定错误码（`E_DOWNLOAD_*`）的双语报错并附 URL，见 [docs/errors.md](./docs/errors.md)。
 
 ---
 
@@ -601,6 +630,7 @@ use({
 | `use`           | `(plugin) → void`                                                       | 全局注册扩展插件（三扩展点，见[扩展](#extend)）                                            |
 | `helpers`       | 命名空间                                                                | 扩展开发工具方法（引擎同源，见[扩展](#extend)）                                            |
 | `getVersion`    | `() → string`                                                           | 当前包版本（运行时读取安装目录 package.json，首次调用后缓存；缺失 / 损坏兜底 `'unknown'`） |
+| `Xlsx2pdfError` | `class extends Error`                                                   | 所有抛出错误均带稳定 `code` + 双语文案；全表见 [docs/errors.md](./docs/errors.md)      |
 
 ### excel2pdf 入参
 
@@ -695,6 +725,9 @@ configure({
 
 **Q：`option.defaults` 和 `${field|text_default:无}` 什么关系？**
 取值顺序 data → 标记内默认值 → `option.defaults`。前者是单个标记的兜底，后者是全局字段兜底，优先级更低。
+
+**Q：程序里怎么按错误类型分支处理？**
+捕获后判断 `err instanceof Xlsx2pdfError`，按稳定的 `err.code` 分支（不要匹配文案）。错误码全表与修复建议见 [docs/errors.md](./docs/errors.md)。
 
 ---
 

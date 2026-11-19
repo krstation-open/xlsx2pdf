@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { PUPPETEER_REVISIONS } from 'puppeteer-core/internal/revisions.js';
 import { getSeams } from './seams.js';
+import { xlsxError } from './errors.js';
 
 // ============================================================
 // 包根目录与内置浏览器路径（与 cwd 无关）
@@ -117,17 +118,17 @@ export function configure(option = {}) {
   if (accepted.has('fontGuard') && option.fontGuard !== undefined) {
     const modes = seams.fontGuardModes;
     if (modes && !modes.includes(option.fontGuard)) {
-      throw new Error(
-        `[xlsx2pdf] configure({ fontGuard }) 只接受 ${modes.join(' / ')}，收到：${JSON.stringify(option.fontGuard)}`
-      );
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] configure({ fontGuard }) 只接受 ${modes.join(' / ')}，收到：${JSON.stringify(option.fontGuard)}`,
+        `configure({ fontGuard }) accepts ${modes.join(' / ')} only, received: ${JSON.stringify(option.fontGuard)}.`);
     }
     config.fontGuard = option.fontGuard;
   }
   if (accepted.has('pageRotate') && option.pageRotate !== undefined) {
     if (typeof option.pageRotate !== 'boolean') {
-      throw new Error(
-        `[xlsx2pdf] configure({ pageRotate }) 只接受 boolean，收到：${JSON.stringify(option.pageRotate)}`
-      );
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] configure({ pageRotate }) 只接受 boolean，收到：${JSON.stringify(option.pageRotate)}`,
+        `configure({ pageRotate }) accepts boolean only, received: ${JSON.stringify(option.pageRotate)}.`);
     }
     config.pageRotate = option.pageRotate;
   }
@@ -155,7 +156,9 @@ export async function resolveBrowserPath() {
   const external = config.browserPath || process.env.XLSX2PDF_BROWSER_PATH;
   if (external) {
     if (!fs.existsSync(external)) {
-      throw new Error(`指定的浏览器可执行文件不存在: ${external}`);
+      throw xlsxError('E_BROWSER_PATH',
+        `指定的浏览器可执行文件不存在: ${external}`,
+        `The specified browser executable does not exist: ${external}`);
     }
     return external;
   }
@@ -167,10 +170,11 @@ export async function resolveBrowserPath() {
   }
 
   // 3. 引导
-  throw new Error(
+  throw xlsxError('E_BROWSER_NOT_FOUND',
     '未找到内置 Chrome 浏览器：可运行 npx xlsx2pdf-browser install 或调用 ensureBrowser() 补装；' +
-    '自带浏览器请 configure({ browserPath }) 或设置环境变量 XLSX2PDF_BROWSER_PATH'
-  );
+    '自带浏览器请 configure({ browserPath }) 或设置环境变量 XLSX2PDF_BROWSER_PATH',
+    'Bundled Chrome not found: run `npx xlsx2pdf-browser install` or call ensureBrowser() to install it; ' +
+    'to reuse your own browser, set configure({ browserPath }) or the XLSX2PDF_BROWSER_PATH environment variable.');
 }
 
 // ============================================================

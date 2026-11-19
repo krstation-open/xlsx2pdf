@@ -9,6 +9,8 @@
  *  - 调用级：option.plugins，仅本次生成生效（冲突时覆盖全局）
  */
 
+import { xlsxError } from './errors.js';
+
 function createPluginState() {
   return { markerTypes: new Map(), fieldResolvers: [], transformModels: [] };
 }
@@ -32,7 +34,9 @@ export function registerBuiltinMarkerTypes(map) {
 
 function applyPlugin(state, plugin, { warnName, warnBuiltin } = {}) {
   if (!plugin || typeof plugin !== 'object') {
-    throw new Error('[registry] 插件必须是对象');
+    throw xlsxError('E_PLUGIN_INVALID',
+      '[registry] 插件必须是对象',
+      'A plugin must be an object.');
   }
   if (plugin.name && warnName) {
     if (warnName.has(plugin.name)) {
@@ -43,7 +47,9 @@ function applyPlugin(state, plugin, { warnName, warnBuiltin } = {}) {
   if (plugin.markerTypes) {
     for (const [type, handler] of Object.entries(plugin.markerTypes)) {
       if (typeof handler !== 'function') {
-        throw new Error(`[registry] markerTypes.${type} 必须是函数`);
+        throw xlsxError('E_PLUGIN_INVALID',
+          `[registry] markerTypes.${type} 必须是函数`,
+          `markerTypes.${type} must be a function.`);
       }
       if (warnBuiltin && builtinMarkerTypes[type]) {
         console.warn(`[registry] 标记类型 "${type}" 覆盖了内置类型`);
@@ -54,14 +60,18 @@ function applyPlugin(state, plugin, { warnName, warnBuiltin } = {}) {
   if (plugin.fieldResolvers) {
     for (const resolver of plugin.fieldResolvers) {
       if (typeof resolver !== 'function') {
-        throw new Error('[registry] fieldResolvers 项必须是函数');
+        throw xlsxError('E_PLUGIN_INVALID',
+          '[registry] fieldResolvers 项必须是函数',
+          'Each fieldResolvers entry must be a function.');
       }
       state.fieldResolvers.push(resolver);
     }
   }
   if (plugin.transformModel) {
     if (typeof plugin.transformModel !== 'function') {
-      throw new Error('[registry] transformModel 必须是函数');
+      throw xlsxError('E_PLUGIN_INVALID',
+        '[registry] transformModel 必须是函数',
+        'transformModel must be a function.');
     }
     state.transformModels.push(plugin.transformModel);
   }

@@ -12,6 +12,7 @@
  */
 
 import { PAGE_SIZES } from './constants.js';
+import { xlsxError } from './errors.js';
 
 /**
  * 判断用户传入的 pageSize 是否有效（视为「显式指定」）
@@ -74,15 +75,17 @@ export function resolvePageSetup(model, userOptions = {}) {
   let pageSize = userPageSize || ps.pageSize;
   if (!pageSize && ps.paperSizeCode != null) {
     if (ps.paperSizeCode >= 256) {
-      throw new Error(
+      throw xlsxError('E_PAPER_CUSTOM',
         `[pagesetup] 模板使用自定义纸张（代码 ${ps.paperSizeCode}），宽高由打印机驱动配置、文件内无法读取。` +
-        `请通过 option.pageSize 显式指定尺寸（如小票 { width: 79.4, height: 47.6 }），否则无法生成正确大小的 PDF`
-      );
+        `请通过 option.pageSize 显式指定尺寸（如小票 { width: 79.4, height: 47.6 }），否则无法生成正确大小的 PDF`,
+        `The template uses custom paper (code ${ps.paperSizeCode}); its dimensions live in the printer driver and cannot be read from the file. ` +
+        'Specify the size explicitly via option.pageSize (e.g. receipt { width: 79.4, height: 47.6 }), otherwise a correctly sized PDF cannot be generated.');
     }
-    throw new Error(
+    throw xlsxError('E_PAPER_CODE',
       `[pagesetup] 模板纸张代码 ${ps.paperSizeCode} 不在支持列表内，请通过 option.pageSize 显式指定尺寸` +
-      `（支持 ${Object.keys(PAGE_SIZES).join('/')} 或 { width, height } mm）`
-    );
+      `（支持 ${Object.keys(PAGE_SIZES).join('/')} 或 { width, height } mm）`,
+      `Template paper code ${ps.paperSizeCode} is not in the supported list; specify the size explicitly via option.pageSize ` +
+      `(supports ${Object.keys(PAGE_SIZES).join('/')} or { width, height } mm).`);
   }
   pageSize = pageSize || EXCEL_DEFAULTS.pageSize;
 

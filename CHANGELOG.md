@@ -9,11 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 - README (EN/zh-CN): Deployment section opens with a "Platform support" note — the bundled Chrome auto-downloads per OS (Windows / macOS Intel & Apple Silicon / Linux), Windows/macOS need no extra system dependencies for local development, plus mirror / retry / cache-location / pinned-version details and postinstall-failure recovery.
 - README (EN/zh-CN): "Feature list and status" appendix (`#status`) — a single table with a checkbox status column (☑ implemented, carrying the introduction version; ☐ not yet implemented, no version shown), plus Pro-only capabilities listed by effect name. Maintenance section now references the appendix alongside the comparison table.
+- Stable error codes: every failure now throws `Xlsx2pdfError` with a stable `err.code` (26 `E_*` codes) and a bilingual message (Chinese original preserved verbatim, English appended — existing message matching keeps working). Per-code reference with causes, fixes and anchors in `docs/errors.md`; `test/error-code-guard.mjs` + `npm run test:errors`.
+- CLI `xlsx2pdf convert` (zero new dependencies): `--data` JSON string / `@file.json`, `--out`, `--html` (HTML-only, no browser), `--page-size` / `--orientation` / `--margin`; shares the conversion pipeline with the example; failures print code + bilingual message + doc anchor and exit non-zero.
+- `examples/basic.mjs` one-shot example (`npm run example`): generates a demo template on the fly (no private assets) and outputs `examples/output/demo.pdf`; shipped inside the package.
+- GitHub Actions: CI matrix (Node 18/20/22 × ubuntu/windows) with bundled-Chrome install cache; Release workflow (tag push → CHANGELOG section → GitHub Release) with `workflow_dispatch` backfill for historical tags; `scripts/release-notes.mjs` section extractor.
+- `index.d.ts`: per-option defaults / precedence / invalid-value (`null` / `''`) semantics documented; `Xlsx2pdfError` class declaration exported.
 
 ### Changed
+
 - README (EN/zh-CN): Platform support note clarifies the bundled Chrome is a separate auto-downloaded build that does not reuse local Chrome by default (set browserPath / XLSX2PDF_BROWSER_PATH and skip the download to reuse a local one).
 - README (EN/zh-CN): documented the intentional option-vs-configure difference for Pro guardrail keys — option raises an explicit error for Pro keys and unknown keys (fail fast), while configure silently ignores undeclared keys and runs on the fixed safety caps; cross-referenced the option, configure and Deployment safety-caps sections so the contrast is no longer read as a contradiction.
 - README (EN/zh-CN): narrative voice uses organizational "we" instead of personal "I" (krstation-open is an organization project); the CLA attestation "I" in CONTRIBUTING is intentionally kept.
+- README (EN/zh-CN): CI badge; quick start adds CLI usage and the one-shot example; new "Error handling" section (stable codes + `Xlsx2pdfError` + `docs/errors.md`); safety-caps wording updated from "Chinese error" to coded bilingual errors; API table and FAQ gain error-code entries.
 
 ## [1.2.0] - 2026-11-16
 

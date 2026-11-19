@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { install, Browser, detectBrowserPlatform, computeExecutablePath } from '@puppeteer/browsers';
 import { PUPPETEER_REVISIONS } from 'puppeteer-core/internal/revisions.js';
+import { xlsxError } from '../src/errors.js';
 
 /** 国内镜像下载 Chrome（避免 Google 源超时/连接重置） */
 export const DOWNLOAD_BASE_URL = 'https://registry.npmmirror.com/-/binary/chrome-for-testing';
@@ -230,7 +231,9 @@ export async function installBrowser() {
     } catch (err) {
       lastPercent = -1;
       if (attempt >= MAX_RETRIES) {
-        throw new Error(`重试 ${MAX_RETRIES} 次仍失败: ${err.message}`);
+        throw xlsxError('E_BROWSER_DOWNLOAD',
+          `重试 ${MAX_RETRIES} 次仍失败: ${err.message}`,
+          `Chrome download still failed after ${MAX_RETRIES} retries: ${err.message}. Check the network and run \`npx xlsx2pdf-browser install\` manually.`);
       }
       const delay = attempt * 3000;
       console.warn(`[browser] 下载失败 (${err.message})，${delay / 1000}s 后第 ${attempt + 1}/${MAX_RETRIES} 次重试…`);

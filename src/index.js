@@ -29,9 +29,12 @@ import { use } from './registry.js';
 import { flattenObject, getFileBuffer, parseMarkerOption, validateMarkerRegex } from './utils.js';
 import { formatValue } from './numfmt.js';
 import { generateCode, bufferToDataUrl } from './barcode.js';
+import { Xlsx2pdfError, xlsxError } from './errors.js';
 
 /** 商业版 Pro 能力咨询方式（统一文案，见 README「社区版 vs Pro」） */
 const PRO_CONTACT = '商业版咨询：business@krstation.com';
+/** 英文报错中的同义咨询入口（邮箱与中文一致） */
+const PRO_CONTACT_EN = 'Pro inquiries: business@krstation.com';
 
 /**
  * 商业版 Pro 专属 option 键：能力未注册时传入任一项即显式报错引导（不静默忽略）。
@@ -58,33 +61,37 @@ const PRO_OPTION_KEYS = {
  */
 function validateParams({ template, data, option = {} }) {
   if (template == null || template === '') {
-    throw new Error('[xlsx2pdf] 缺少 template（Excel 模板路径 / URL / Buffer）');
+    throw xlsxError('E_TEMPLATE_MISSING',
+      '[xlsx2pdf] 缺少 template（Excel 模板路径 / URL / Buffer）',
+      'Missing template (Excel template path / URL / Buffer).');
   }
 
   // data 数组多页批量为 Pro 能力；未注册时仅接受对象（缺省按空数据渲染一页）
   if (Array.isArray(data) && !hasCapability('arrayData')) {
-    throw new Error(
+    throw xlsxError('E_OPTION_PRO',
       '[xlsx2pdf] data 传数组（一份模板批量出多页）是商业版 Pro 能力，' +
-      `社区版仅支持单页对象数据。${PRO_CONTACT}`
-    );
+      `社区版仅支持单页对象数据。${PRO_CONTACT}`,
+      'Passing an array as data (batch multi-page from one template) is a Pro capability; the community edition supports single-page object data only. ' + PRO_CONTACT_EN);
   }
   if (data != null && typeof data !== 'object') {
-    throw new Error(`[xlsx2pdf] data 只接受对象，收到：${typeof data}`);
+    throw xlsxError('E_DATA_TYPE',
+      `[xlsx2pdf] data 只接受对象，收到：${typeof data}`,
+      `data must be an object, received: ${typeof data}.`);
   }
 
   // 对象型 pageSize（自定义纸张 {width,height}mm）为 Pro 能力
   if (isMeaningfulPageSize(option.pageSize) && typeof option.pageSize === 'object' && !hasCapability('customPaper')) {
-    throw new Error(
+    throw xlsxError('E_OPTION_PRO',
       '[xlsx2pdf] option.pageSize 传对象（自定义纸张宽高 mm）是商业版 Pro 能力，' +
-      `社区版仅支持具名标准纸张。${PRO_CONTACT}`
-    );
+      `社区版仅支持具名标准纸张。${PRO_CONTACT}`,
+      'option.pageSize as an object (custom paper width/height in mm) is a Pro capability; the community edition supports named standard paper sizes only. ' + PRO_CONTACT_EN);
   }
 
   for (const [key, [cap, desc]] of Object.entries(PRO_OPTION_KEYS)) {
     if (option[key] !== undefined && !hasCapability(cap)) {
-      throw new Error(
-        `[xlsx2pdf] option.${key}（${desc}）是商业版 Pro 能力，社区版不提供。${PRO_CONTACT}`
-      );
+      throw xlsxError('E_OPTION_PRO',
+        `[xlsx2pdf] option.${key}（${desc}）是商业版 Pro 能力，社区版不提供。${PRO_CONTACT}`,
+        `option.${key} (${desc}) is a Pro capability and is not available in the community edition. ${PRO_CONTACT_EN}`);
     }
   }
 
@@ -96,9 +103,9 @@ function validateParams({ template, data, option = {} }) {
   }
   for (const key of Object.keys(option)) {
     if (!ALLOWED_KEYS.includes(key)) {
-      throw new Error(
-        `[xlsx2pdf] 不支持的 option.${key}，社区版支持：${ALLOWED_KEYS.join(' / ')}`
-      );
+      throw xlsxError('E_OPTION_UNKNOWN',
+        `[xlsx2pdf] 不支持的 option.${key}，社区版支持：${ALLOWED_KEYS.join(' / ')}`,
+        `Unsupported option.${key}; the community edition supports: ${ALLOWED_KEYS.join(' / ')}.`);
     }
   }
 }
@@ -238,9 +245,9 @@ export async function excel2pdf({ template, data, option = {} }) {
   // （能力未注册时 option.pageRotate 由 validateParams 抛 Pro 引导，此处不重复校验）
   const pageRotate = option.pageRotate ?? getConfig().pageRotate;
   if (hasCapability('pageRotate') && typeof pageRotate !== 'boolean') {
-    throw new Error(
-      `[xlsx2pdf] option.pageRotate 只接受 boolean，收到：${JSON.stringify(option.pageRotate)}`
-    );
+    throw xlsxError('E_OPTION_INVALID',
+      `[xlsx2pdf] option.pageRotate 只接受 boolean，收到：${JSON.stringify(option.pageRotate)}`,
+      `option.pageRotate accepts boolean only, received: ${JSON.stringify(option.pageRotate)}.`);
   }
 
   const { html, pages } = await buildHtml({ template, data, option });
@@ -249,9 +256,9 @@ export async function excel2pdf({ template, data, option = {} }) {
   const fontGuard = option.fontGuard ?? getConfig().fontGuard;
   const fontGuardModes = seams.fontGuardModes;
   if (fontGuardModes && !fontGuardModes.includes(fontGuard)) {
-    throw new Error(
-      `[xlsx2pdf] option.fontGuard 只接受 ${fontGuardModes.join(' / ')}，收到：${JSON.stringify(option.fontGuard)}`
-    );
+    throw xlsxError('E_OPTION_INVALID',
+      `[xlsx2pdf] option.fontGuard 只接受 ${fontGuardModes.join(' / ')}，收到：${JSON.stringify(option.fontGuard)}`,
+      `option.fontGuard accepts ${fontGuardModes.join(' / ')} only, received: ${JSON.stringify(option.fontGuard)}.`);
   }
 
   const firstPage = pages[0];
@@ -301,6 +308,6 @@ export const helpers = {
   bufferToDataUrl,
 };
 
-export { configure, ensureBrowser, closeBrowser, use };
+export { configure, ensureBrowser, closeBrowser, use, Xlsx2pdfError };
 
-export default { excel2pdf, excel2html, configure, ensureBrowser, closeBrowser, use, getVersion, helpers };
+export default { excel2pdf, excel2html, configure, ensureBrowser, closeBrowser, use, getVersion, helpers, Xlsx2pdfError };

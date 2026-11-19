@@ -2,7 +2,7 @@
 /**
  * 商业秘密红线扫描（CI 闸门）：零命中才放行
  *
- * 扫描范围：src/ scripts/ test/ dist/（存在时） index.d.ts package.json
+ * 扫描范围：src/ scripts/ test/ dist/（存在时） docs/（存在时） index.d.ts package.json
  * （README 等文档按方案 §5 草稿单独红线自查，不在本扫描范围）
  *
  * 关键词口径说明：
@@ -69,7 +69,7 @@ const FORBIDDEN_FILES = [
 ];
 
 /** 扫描目标（目录递归 / 单文件） */
-const SCAN_DIRS = ['src', 'scripts', 'test', 'dist'];
+const SCAN_DIRS = ['src', 'scripts', 'test', 'dist', 'docs'];
 const SCAN_FILES = ['index.d.ts', 'package.json'];
 
 /** 排除自身（关键词清单天然命中） */

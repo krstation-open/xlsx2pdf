@@ -1,6 +1,7 @@
 import axios from 'axios';
 import path from 'node:path';
 import fs from 'node:fs';
+import { xlsxError } from './errors.js';
 
 // ============================================================
 // 远程下载安全限制：防慢速拖死/超大响应打爆内存（SSRF 面由服务侧出口策略兜底）
@@ -11,29 +12,40 @@ export const IMAGE_HTTP_OPTIONS = {
 };
 
 /**
- * 把 axios 原始错误翻译成中文友好报错（统一带 [xlsx2pdf] 前缀，便于服务侧识别）
+ * 把 axios 原始错误翻译成中文友好报错（统一带 [xlsx2pdf] 前缀，便于服务侧识别），
+ * 携带稳定错误码（E_DOWNLOAD_*）并追加英文
  * @param {Error} err - axios 抛出的错误
  * @param {string} url - 请求地址（附在报错里便于定位）
  * @param {string} scene - 场景描述，如「模板文件」「远程图片」
- * @returns {Error}
+ * @returns {import('./errors.js').Xlsx2pdfError}
  */
 function toFriendlyHttpError(err, url, scene) {
   const msg = err?.message || '';
   if (/maxContentLength|maxBodyLength/.test(msg)) {
     const limitMB = IMAGE_HTTP_OPTIONS.maxContentLength / 1024 / 1024;
-    return new Error(`[xlsx2pdf] ${scene}下载失败：文件超过 ${limitMB}MB 下载上限，URL: ${url}`);
+    return xlsxError('E_DOWNLOAD_SIZE',
+      `[xlsx2pdf] ${scene}下载失败：文件超过 ${limitMB}MB 下载上限，URL: ${url}`,
+      `Failed to download ${scene}: file exceeds the ${limitMB}MB download cap. URL: ${url}`);
   }
   if (err?.code === 'ECONNABORTED' || /timeout/i.test(msg)) {
-    return new Error(`[xlsx2pdf] ${scene}下载超时（${IMAGE_HTTP_OPTIONS.timeout / 1000} 秒），URL: ${url}`);
+    return xlsxError('E_DOWNLOAD_TIMEOUT',
+      `[xlsx2pdf] ${scene}下载超时（${IMAGE_HTTP_OPTIONS.timeout / 1000} 秒），URL: ${url}`,
+      `Download of ${scene} timed out (${IMAGE_HTTP_OPTIONS.timeout / 1000}s). URL: ${url}`);
   }
   const status = err?.response?.status;
   if (status) {
-    return new Error(`[xlsx2pdf] ${scene}下载失败：HTTP ${status}，URL: ${url}`);
+    return xlsxError('E_DOWNLOAD_HTTP',
+      `[xlsx2pdf] ${scene}下载失败：HTTP ${status}，URL: ${url}`,
+      `Failed to download ${scene}: HTTP ${status}. URL: ${url}`);
   }
   if (err?.code) {
-    return new Error(`[xlsx2pdf] ${scene}下载失败：网络错误 ${err.code}，URL: ${url}`);
+    return xlsxError('E_DOWNLOAD_NETWORK',
+      `[xlsx2pdf] ${scene}下载失败：网络错误 ${err.code}，URL: ${url}`,
+      `Failed to download ${scene}: network error ${err.code}. URL: ${url}`);
   }
-  return new Error(`[xlsx2pdf] ${scene}下载失败：${msg}，URL: ${url}`);
+  return xlsxError('E_DOWNLOAD_NETWORK',
+    `[xlsx2pdf] ${scene}下载失败：${msg}，URL: ${url}`,
+    `Failed to download ${scene}: ${msg}. URL: ${url}`);
 }
 
 /**
@@ -162,14 +174,20 @@ export const DEFAULT_MARKER_SEPARATOR = '|';
  */
 export function validateMarkerRegex(regex) {
   if (!(regex instanceof RegExp)) {
-    throw new Error('markerRegex 必须是 RegExp 实例，如 /\\{\\{([^}]+)\\}\\}/g');
+    throw xlsxError('E_MARKER_REGEX',
+      'markerRegex 必须是 RegExp 实例，如 /\\{\\{([^}]+)\\}\\}/g',
+      'markerRegex must be a RegExp instance, e.g. /\\{\\{([^}]+)\\}\\}/g.');
   }
   if (!regex.global) {
-    throw new Error('markerRegex 必须带 g 标志（需逐处匹配全部标记）');
+    throw xlsxError('E_MARKER_REGEX',
+      'markerRegex 必须带 g 标志（需逐处匹配全部标记）',
+      'markerRegex must carry the g flag (every marker occurrence must be matched).');
   }
   // 用捕获组 1 取标记内部内容；无捕获组则永远取不到字段，直接拒绝
   if (!/\(/.test(regex.source)) {
-    throw new Error('markerRegex 必须含至少一个捕获组（捕获组 1 = 标记内部内容）');
+    throw xlsxError('E_MARKER_REGEX',
+      'markerRegex 必须含至少一个捕获组（捕获组 1 = 标记内部内容）',
+      'markerRegex must contain at least one capture group (group 1 = marker inner content).');
   }
 }
 
@@ -210,11 +228,12 @@ export function parseMarkerOption(optionStr = '', knownTypes = CONTENT_TYPES) {
   if (parts.length === 0) return option;
 
   // 第一个部分可能是类型：未注册的增强类型显式引导商业版，已注册类型正常消费
+  // （image/img/barcode/qrcode 自 1.1.0 已内置社区版，实际仅 watermark 会走到此分支）
   if (PRO_MARKER_TYPES.includes(parts[0]) && !knownTypes.includes(parts[0])) {
-    throw new Error(
+    throw xlsxError('E_MARKER_PRO',
       `[xlsx2pdf] 标记类型 "${parts[0]}"（图片/条码/二维码/水印）是商业版 Pro 能力，` +
-      '社区版仅支持 text 文本标记。商业版咨询：business@krstation.com'
-    );
+      '社区版仅支持 text 文本标记。商业版咨询：business@krstation.com',
+      `Marker type "${parts[0]}" is a Pro capability; the community edition has text/image/img/barcode/qrcode built in. Pro inquiries: business@krstation.com`);
   }
   if (knownTypes.includes(parts[0])) {
     option.type = parts.shift();

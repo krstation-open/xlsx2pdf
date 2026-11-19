@@ -9,6 +9,7 @@ A Node.js server-side library that goes Excel template → marker substitution �
 [![npm](https://img.shields.io/npm/v/xlsx2pdf)](https://www.npmjs.com/package/xlsx2pdf)
 [![downloads](https://img.shields.io/npm/dw/xlsx2pdf)](https://www.npmjs.com/package/xlsx2pdf)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
+[![CI](https://github.com/krstation-open/xlsx2pdf/actions/workflows/ci.yml/badge.svg)](https://github.com/krstation-open/xlsx2pdf/actions/workflows/ci.yml)
 ![node](https://img.shields.io/badge/node-%3E%3D18.17-green)
 
 **Official website**: [https://www.krstation.com/](https://www.krstation.com/)
@@ -61,6 +62,15 @@ writeFileSync('out.pdf', pdf);
 
 Merged cells, fonts, backgrounds, borders, number formats and page setup are all preserved.
 
+Prefer the command line? The package ships a CLI:
+
+```bash
+npx xlsx2pdf convert tpl.xlsx --data '{"name":"Alice"}' --out out.pdf
+# HTML-only preview (no browser launch): add --html
+```
+
+A runnable end-to-end example ships in `examples/basic.mjs` — in a source checkout, `npm run example` generates a demo template on the fly and outputs `examples/output/demo.pdf`.
+
 ---
 
 <a id="what-for"></a>
@@ -104,7 +114,7 @@ We should also be clear about the community edition's limits: column width uses 
 - **Bundled headless Chrome**: no external Office engine, consistent rendering
 - **Lightweight preview**: `excel2html()` outputs HTML only, no browser launch
 - **Extensible**: three extension points (marker types / field resolvers / model hooks), custom `markerRegex` / `markerSeparator`
-- **Engineering**: ESM / CJS dual mode + TypeScript declarations, built-in template-size / cell-count safety caps
+- **Engineering**: ESM / CJS dual mode + TypeScript declarations, built-in template-size / cell-count safety caps, stable error codes with bilingual messages, CLI (`xlsx2pdf convert`)
 
 ---
 
@@ -154,6 +164,25 @@ writeFileSync('out.pdf', pdf);
 res.setHeader('Content-Type', 'application/pdf');
 res.send(pdf);
 ```
+
+### 4. Error handling
+
+Every failure throws an `Xlsx2pdfError` carrying a stable `code` (e.g. `E_TEMPLATE_MISSING`, `E_DOWNLOAD_TIMEOUT`, `E_BROWSER_NOT_FOUND`) and a bilingual message — Chinese first, English appended. The full code table, with per-code causes and fixes, lives in [docs/errors.md](./docs/errors.md).
+
+```javascript
+import { excel2pdf, Xlsx2pdfError } from 'xlsx2pdf';
+
+try {
+  await excel2pdf({ template: './tpl.xlsx', data });
+} catch (err) {
+  if (err instanceof Xlsx2pdfError) {
+    console.error(err.code); // stable across versions — branch on the code, not on message text
+  }
+  throw err;
+}
+```
+
+The CLI prints the code, the message and a doc anchor on failure, and exits non-zero.
 
 ---
 
@@ -435,7 +464,7 @@ Browser resolution precedence: `configure({ browserPath })` > the `XLSX2PDF_BROW
 | Cell count         | 20000   | actual rows×cols; reject beyond cap (streaming pre-check rejects early before load) |
 | Render concurrency | 1       | max simultaneously open tabs; excess queued                                         |
 
-These three are fixed defaults in the community edition and are not parameterized; guardrail parameterization such as `maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` is a Pro capability; passing them via option in the community edition raises an explicit guidance error (configure silently ignores them instead — see [API](#api)). Remote resources (template URL / image URL) download with a 30-second timeout and a 20MB size cap; failures throw a Chinese error prefixed `[xlsx2pdf]` with the URL attached.
+These three are fixed defaults in the community edition and are not parameterized; guardrail parameterization such as `maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` is a Pro capability; passing them via option in the community edition raises an explicit guidance error (configure silently ignores them instead — see [API](#api)). Remote resources (template URL / image URL) download with a 30-second timeout and a 20MB size cap; failures throw a coded error (`E_DOWNLOAD_*`) with a bilingual message and the URL attached — see [docs/errors.md](./docs/errors.md).
 
 ---
 
@@ -601,6 +630,7 @@ Engine-homologous utilities are exposed under the `helpers` namespace (`import {
 | `use`           | `(plugin) → void`                                                       | register an extension plugin globally (three points, see [Extensions](#extend))                                                                        |
 | `helpers`       | namespace                                                               | extension-development utilities (engine-homologous, see [Extensions](#extend))                                                                         |
 | `getVersion`    | `() → string`                                                           | current package version (read at runtime from the install dir's package.json, cached after first call; falls back to `'unknown'` if missing / corrupt) |
+| `Xlsx2pdfError` | `class extends Error`                                                   | every thrown error carries a stable `code` + bilingual message; full table in [docs/errors.md](./docs/errors.md)                                     |
 
 ### excel2pdf parameters
 
@@ -695,6 +725,9 @@ Chrome font fallback handles rendering; glyphs may differ from Excel when a font
 
 **Q: How do `option.defaults` and `${field|text_default:N/A}` relate?**
 Resolution order: data → marker-level default → `option.defaults`. The former is a per-marker fallback, the latter a global per-field fallback with lower priority.
+
+**Q: How do I branch on errors programmatically?**
+Catch and check `err instanceof Xlsx2pdfError`, then branch on the stable `err.code` (not on message text). Full code table with fixes: [docs/errors.md](./docs/errors.md).
 
 ---
 

@@ -1,0 +1,45 @@
+# Release 自动化：tag push → 提取 CHANGELOG 段落 → 建 GitHub Release。
+# CHANGELOG 保持手写源 of truth（不自动拼接 commit subject）。
+# 补建历史 Release：Actions 页手动运行本 workflow，tags 输入如 v1.0.1,v1.1.0,v1.2.0。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: '补建已有 tag 的 Release（逗号分隔，如 v1.0.1,v1.1.0,v1.2.0）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create releases from CHANGELOG sections
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAGS: ${{ inputs.tags }}
+          PUSHED_TAG: ${{ github.ref_name }}
+        run: |
+          if [ -n "$INPUT_TAGS" ]; then TAGS="$INPUT_TAGS"; else TAGS="$PUSHED_TAG"; fi
+          IFS=',' read -ra LIST <<< "$TAGS"
+          for TAG in "${LIST[@]}"; do
+            TAG=$(echo "$TAG" | xargs)
+            [ -z "$TAG" ] && continue
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "[release] $TAG 已有 Release，跳过"
+              continue
+            fi
+            VER="${TAG#v}"
+            node scripts/release-notes.mjs "$VER" > release-notes.md
+            gh release create "$TAG" --title "$TAG" --notes-file release-notes.md --verify-tag
+            echo "[release] $TAG Release 已创建"
+          done

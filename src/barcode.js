@@ -3,6 +3,7 @@
  * 纯 JS 依赖 bwip-js，无 native 二进制；压缩/DPI 归一等生产增强仍由商业版 sharp 管线提供。
  */
 import bwipjs from 'bwip-js';
+import { xlsxError } from './errors.js';
 
 /**
  * 生成条形码/二维码，返回 base64 Data URL
@@ -22,7 +23,9 @@ export async function generateCode(type, text, opts = {}) {
 
   const bcid = bcidMap[type];
   if (!bcid) {
-    throw new Error(`不支持的条码类型: ${type}，可选: barcode, qrcode`);
+    throw xlsxError('E_CODE_TYPE',
+      `不支持的条码类型: ${type}，可选: barcode, qrcode`,
+      `Unsupported code type: ${type}; options: barcode, qrcode.`);
   }
 
   const buffer = await bwipjs.toBuffer({

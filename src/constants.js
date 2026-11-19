@@ -1,6 +1,8 @@
 /**
  * 页面尺寸配置（单位：mm）
  */
+import { xlsxError } from './errors.js';
+
 export const PAGE_SIZES = {
   A3: { width: 297, height: 420 },
   A4: { width: 210, height: 297 },
@@ -62,9 +64,9 @@ export function getPageDimensions(pageSize, orientation) {
       const shown = typeof pageSize === 'object'
         ? `对象 ${JSON.stringify(pageSize, (k, v) => (v === undefined ? null : v))}（{ width, height } 必须同时为有效正数）`
         : `名称 "${pageSize}"`;
-      throw new Error(
-        `[getPageDimensions] 不支持的纸张${shown}，支持 ${Object.keys(PAGE_SIZES).join('/')} 或 { width, height } mm`
-      );
+      throw xlsxError('E_PAPER_UNSUPPORTED',
+        `[getPageDimensions] 不支持的纸张${shown}，支持 ${Object.keys(PAGE_SIZES).join('/')} 或 { width, height } mm`,
+        `Unsupported paper size ${shown}; supports ${Object.keys(PAGE_SIZES).join('/')} or { width, height } mm.`);
     }
     const size = PAGE_SIZES[pageSize] || PAGE_SIZES.A4;
     widthMm = size.width;

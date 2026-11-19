@@ -1,0 +1,72 @@
+# CI：build + 红线扫描 + 全部守卫（ESM/CJS 冒烟 / 富媒体 / 明细行 / 错误码 / CLI）
+# 矩阵 Node 18/20/22 × ubuntu/windows；内置 Chrome 走安装缓存（命中秒级跳过，
+# 未命中经镜像源下载；Linux 系统依赖由安装脚本自动 apt 补齐）。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [18, 20, 22]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # postinstall 不下载浏览器（交给下方带缓存的安装步骤，避免重复下载）
+      - name: Install dependencies
+        run: npm ci
+        env:
+          XLSX2PDF_SKIP_BROWSER: '1'
+
+      - name: Resolve Chrome build id
+        id: chrome
+        shell: bash
+        run: |
+          BUILD=$(node -p "require('puppeteer-core/internal/revisions.js').PUPPETEER_REVISIONS.chrome")
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+
+      - name: Cache bundled Chrome
+        uses: actions/cache@v4
+        with:
+          path: browsers
+          key: chrome-${{ runner.os }}-${{ steps.chrome.outputs.build }}
+
+      # 幂等：已存在则秒级跳过下载（仅复检 Linux 系统依赖）；缺失则镜像源下载 + 自动补依赖
+      - name: Ensure bundled Chrome
+        run: node scripts/install-browser.mjs install
+
+      - name: Build
+        run: npm run build
+
+      - name: Red-line scan
+        run: npm run redline
+
+      - name: Smoke (ESM)
+        run: npm test
+
+      - name: Smoke (CJS)
+        run: npm run test:cjs
+
+      - name: Media guard
+        run: npm run test:media
+
+      - name: Detail-row guard
+        run: npm run test:detail
+
+      - name: Error-code guard
+        run: npm run test:errors
+
+      - name: CLI guard
+        run: npm run test:cli

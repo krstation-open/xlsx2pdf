@@ -14,6 +14,7 @@ import {
 } from './registry.js';
 import { imageLikeHandler } from './markers.js';
 import { normalizeImageSizes } from './image.js';
+import { xlsxError, isCodedError } from './errors.js';
 
 // 列宽度量基准 MDW：核心按公开常数 7（Calibri 11pt）换算；
 // 按字体/字号精确取值的增强实现由商业版经 seams.resolveMdw 注入
@@ -262,18 +263,27 @@ function hasCellVisualStyle(cell) {
  * @returns {Promise<Object>} WorksheetModel
  */
 export async function processTemplate(templateSource, data, option = {}) {
-  // 1. 加载模板
-  const buffer = await getFileBuffer(templateSource);
+  // 1. 加载模板（读取/下载失败统一包装为 E_TEMPLATE_LOAD；已带码的下载错误原样重抛）
+  let buffer;
+  try {
+    buffer = await getFileBuffer(templateSource);
+  } catch (err) {
+    if (isCodedError(err)) throw err;
+    throw xlsxError('E_TEMPLATE_LOAD',
+      `[xlsx2pdf] 模板读取失败：${err.message}`,
+      `Failed to read the template: ${err.message}`);
+  }
 
   // 体积守卫：超大文件会让 ExcelJS 内存模型与后续整条链路成比例膨胀，
   // 单页渲染下产物也必然被裁剪无意义，早拒绝优于击穿服务
   // （实测 20.8MB/18万格模板：单请求 Node 峰值 1.3GB + 87MB PDF，2C4G 服务必宕）
   const maxSize = option.maxTemplateSize;
   if (maxSize > 0 && buffer.length > maxSize) {
-    throw new Error(
+    throw xlsxError('E_SIZE_CAP',
       `[xlsx2pdf] 模板文件过大：${(buffer.length / 1024 / 1024).toFixed(1)}MB，超过上限 ${(maxSize / 1024 / 1024).toFixed(0)}MB。` +
-      '单页渲染无法承载超大模板（产物必被裁剪），请拆分数据分批生成。'
-    );
+      '单页渲染无法承载超大模板（产物必被裁剪），请拆分数据分批生成。',
+      `Template file too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB exceeds the ${(maxSize / 1024 / 1024).toFixed(0)}MB cap. ` +
+      'Single-page rendering cannot carry oversized templates (output would be clipped); split the data and generate in batches.');
   }
 
   // 单元格数快速预检：在 ExcelJS 加载前拦截明显超限的大文件，
@@ -282,16 +292,29 @@ export async function processTemplate(templateSource, data, option = {}) {
   if (maxCells > 0) {
     const declared = await declaredCellCount(buffer, maxCells);
     if (declared !== null && declared > maxCells) {
-      throw new Error(
+      throw xlsxError('E_CELL_CAP',
         `[xlsx2pdf] 模板过大：预检估算约 ${declared} 个单元格，单元格数超过上限 ${maxCells}。` +
-        '单页渲染无法承载超大表格（产物必被裁剪），请按业务分页拆分数据分批生成。'
-      );
+        '单页渲染无法承载超大表格（产物必被裁剪），请按业务分页拆分数据分批生成。',
+        `Template too large: pre-check estimates ~${declared} cells, exceeding the ${maxCells}-cell cap. ` +
+        'Single-page rendering cannot carry oversized sheets (output would be clipped); split the data by business pages and generate in batches.');
     }
   }
 
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
+  try {
+    await workbook.xlsx.load(buffer);
+  } catch (err) {
+    if (isCodedError(err)) throw err;
+    throw xlsxError('E_TEMPLATE_LOAD',
+      `[xlsx2pdf] 模板解析失败（不是有效的 xlsx 文件或已损坏）：${err.message}`,
+      `Failed to parse the template (not a valid xlsx file, or corrupted): ${err.message}`);
+  }
   const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    throw xlsxError('E_TEMPLATE_LOAD',
+      '[xlsx2pdf] 模板中没有工作表，无法渲染',
+      'The template contains no worksheet to render.');
+  }
 
   // 2. 拍平数据
   const flatData = flattenObject(data);
@@ -307,7 +330,9 @@ export async function processTemplate(templateSource, data, option = {}) {
   // 标记内部分隔符：默认 |；显式传入须为非空字符串（空串会令所有标记字段解析错乱）
   const markerSeparator = option.markerSeparator ?? DEFAULT_MARKER_SEPARATOR;
   if (typeof markerSeparator !== 'string' || markerSeparator.length === 0) {
-    throw new Error('markerSeparator 必须是非空字符串（默认 "|"）');
+    throw xlsxError('E_MARKER_SEPARATOR',
+      'markerSeparator 必须是非空字符串（默认 "|"）',
+      'markerSeparator must be a non-empty string (default "|").');
   }
 
   // 3. 收集列宽、行高、合并区域
@@ -342,10 +367,11 @@ export async function processTemplate(templateSource, data, option = {}) {
   // 单元格数守卫（实测兜底）：须在后续逐格处理/渲染前拦截（18 万格会产出 1.1GB+ 堆占用与
   // 数十 MB HTML/近百 MB PDF，且 fit 单页布局必然裁剪，产物无意义）
   if (maxCells > 0 && rowCount * columnCount > maxCells) {
-    throw new Error(
+    throw xlsxError('E_CELL_CAP',
       `[xlsx2pdf] 模板过大：实际范围 ${rowCount} 行 × ${columnCount} 列 = ${rowCount * columnCount} 个单元格，单元格数超过上限 ${maxCells}。` +
-      '单页渲染无法承载超大表格（产物必被裁剪），请按业务分页拆分数据分批生成。'
-    );
+      '单页渲染无法承载超大表格（产物必被裁剪），请按业务分页拆分数据分批生成。',
+      `Template too large: actual range ${rowCount} rows × ${columnCount} columns = ${rowCount * columnCount} cells, exceeding the ${maxCells}-cell cap. ` +
+      'Single-page rendering cannot carry oversized sheets (output would be clipped); split the data by business pages and generate in batches.');
   }
 
   // 3c. 收集列宽（仅取实际使用的列）

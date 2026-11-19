@@ -4,6 +4,7 @@
  * 社区版 API 面：单页对象数据 + 精简 option + 自定义扩展（use/plugins/标记语法）
  * + 内置富媒体基础标记（image/img/barcode/qrcode）+ #数组.字段 明细行索引映射。
  * 商业版 Pro 能力（数组多页批量/watermark/自适应/精确缩放/护栏等）传入时运行时抛引导错误。
+ * 可预期失败均抛 Xlsx2pdfError（携带稳定 err.code，码表见 docs/errors.md）。
  */
 
 /// <reference types="node" />
@@ -60,29 +61,51 @@ export interface Plugin {
   transformModel?: (model: unknown, ctx: unknown) => unknown;
 }
 
-/** 生成配置项（页面设置类优先级：用户传参 > 模板 pageSetup > Excel 内建默认） */
+/** 生成配置项（页面设置类优先级：用户传参 > 模板 pageSetup > Excel 内建默认；兜底默认只在模板也未设置时生效） */
 export interface GenerateOptions {
-  /** A3/A4/A5/B4/B5/letter/legal */
+  /**
+   * 具名标准纸张 A3/A4/A5/B4/B5/letter/legal。
+   * 优先级：用户传参 > 模板 pageSetup > 'A4'。
+   * '' / null / undefined 均视同未传；无效对象（缺有效 width/height）也视同未传，不短路模板值。
+   * 对象型自定义纸张 { width, height } mm 为商业版 Pro 能力（传入抛 E_OPTION_PRO）。
+   */
   pageSize?: StandardPageSize;
-  /** portrait / landscape */
+  /** portrait / landscape；优先级：用户传参 > 模板 pageSetup > 'portrait'；'' / null / undefined 视同未传 */
   orientation?: 'portrait' | 'landscape';
-  /** 全局默认值 { 字段名: '默认值' } */
+  /**
+   * 全局默认值 { 字段名: '默认值' }，取值链路的最后兜底：
+   * fieldResolvers（首个非 undefined 命中）→ data 拍平取值 → 标记内默认值（_default:）→ option.defaults。
+   * 字段值为 undefined / null / '' 均视同缺失，逐层走兜底；兜底后仍无值则清除标记。
+   */
   defaults?: Record<string, unknown>;
-  /** 页边距 mm，逐字段合并；模板未设时兜底为 Excel 内建默认（上下 19.1 / 左右 17.8mm） */
+  /**
+   * 页边距 mm，逐字段合并：用户字段 > 模板字段 > Excel 内建默认（上下 19.1 / 左右 17.8mm）。
+   * 显式 0 有效（小票无边距场景）；'' / null / undefined / NaN / 负数 / 带单位字符串（如 '19mm'）视同未传。
+   */
   margin?: Margin;
   /** 调用级扩展插件（仅本次生成生效，冲突时覆盖全局） */
   plugins?: Plugin[];
-  /** 自定义标记语法匹配正则（g 标志 + 捕获组 1；优先于 configure 全局默认） */
+  /**
+   * 自定义标记语法匹配正则（契约：g 标志 + 捕获组 1 = 标记内部内容，违约抛 E_MARKER_REGEX）。
+   * 优先级：调用级 option.markerRegex > configure({ markerRegex }) 全局默认 > 内置 ${...}。
+   */
   markerRegex?: RegExp;
-  /** 标记内部「字段 / 类型_参数」分隔符（默认 '|'；优先于 configure 全局默认） */
+  /**
+   * 标记内部「字段 / 类型_参数」分隔符，默认 '|'；空串/非字符串抛 E_MARKER_SEPARATOR。
+   * 优先级：调用级 > configure({ markerSeparator }) 全局默认 > '|'。
+   */
   markerSeparator?: string;
 }
 
 /** 生成入参 */
 export interface GenerateParams {
-  /** Excel 模板路径/URL/Buffer */
+  /** Excel 模板路径/URL/Buffer（缺失抛 E_TEMPLATE_MISSING；读取/解析失败抛 E_TEMPLATE_LOAD） */
   template: string | Buffer;
-  /** 数据对象（支持嵌套点路径取值）；缺省时渲染一页空模板。数组多页批量为商业版 Pro 能力 */
+  /**
+   * 数据对象（支持嵌套点路径取值）；缺省 / null 时渲染一页空模板。
+   * 字段值 undefined / null / '' 视同缺失，走标记默认值 → option.defaults 兜底。
+   * 数组多页批量为商业版 Pro 能力（传入抛 E_OPTION_PRO）。
+   */
   data?: Record<string, unknown>;
   /** 配置项 */
   option?: GenerateOptions;
@@ -151,6 +174,21 @@ export const helpers: {
 };
 
 // ============================================================
+// 错误
+// ============================================================
+
+/**
+ * 携带稳定错误码的 xlsx2pdf 错误（所有可预期失败均抛此类型）。
+ * message 为双语（中文原文在前 + 英文在后）；按 code 编程处理，不要匹配文案。
+ * 码表与修复建议见 docs/errors.md（每个码一个锚点 #e_xxx）。
+ */
+export class Xlsx2pdfError extends Error {
+  /** 稳定错误码（E_* 大写蛇形，如 E_TEMPLATE_LOAD / E_BROWSER_NOT_FOUND / E_OPTION_PRO） */
+  code: string;
+  constructor(code: string, message: string);
+}
+
+// ============================================================
 // 其他
 // ============================================================
 
@@ -166,5 +204,6 @@ declare const _default: {
   use: typeof use;
   getVersion: typeof getVersion;
   helpers: typeof helpers;
+  Xlsx2pdfError: typeof Xlsx2pdfError;
 };
 export default _default;

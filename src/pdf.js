@@ -1,9 +1,11 @@
 import puppeteer from 'puppeteer-core';
+import { spawnSync } from 'node:child_process';
 
 import { getPageDimensions } from './constants.js';
 import { EXCEL_DEFAULTS, isMeaningfulPageSize } from './pagesetup.js';
 import { resolveBrowserPath, getConfig } from './browser.js';
 import { getSeams } from './seams.js';
+import { xlsxError, isCodedError } from './errors.js';
 
 // ============================================================
 // 浏览器实例复用（单例）
@@ -12,6 +14,26 @@ import { getSeams } from './seams.js';
 /** @type {import('puppeteer-core').Browser|null} */
 let browser = null;
 let launchPromise = null;
+
+/**
+ * Linux 启动失败时用 ldd 诊断是否缺系统库（仅错误路径执行，正常渲染零开销）：
+ * 缺库 → E_BROWSER_DEPS 附 apt 修复指引；否则维持 E_BROWSER_LAUNCH
+ */
+function launchError(err, executablePath) {
+  if (process.platform === 'linux') {
+    try {
+      const ldd = spawnSync('ldd', [executablePath], { encoding: 'utf8' });
+      if (ldd.status === 0 && ldd.stdout.includes('not found')) {
+        return xlsxError('E_BROWSER_DEPS',
+          `[xlsx2pdf] Chrome 启动失败：缺少系统依赖库（ldd 检出 not found）。请安装缺失库后重试（Debian/Ubuntu 可参考 README 部署节的 apt 包清单）。原始错误：${err.message}`,
+          `Chrome failed to launch: missing system libraries (ldd reports "not found"). Install the missing libraries and retry (see the apt package list in the README Deployment section on Debian/Ubuntu). Original error: ${err.message}`);
+      }
+    } catch (_) { /* 诊断失败不阻断，回落通用启动错误 */ }
+  }
+  return xlsxError('E_BROWSER_LAUNCH',
+    `[xlsx2pdf] Chrome 启动失败：${err.message}`,
+    `Chrome failed to launch: ${err.message}`);
+}
 
 /**
  * 获取（或创建）复用的浏览器实例
@@ -41,6 +63,9 @@ async function getBrowser() {
       '--disable-dev-shm-usage',
       ...cfg.launchArgs,
     ],
+  }).catch((err) => {
+    launchPromise = null;
+    throw launchError(err, executablePath);
   });
 
   browser = await launchPromise;
@@ -181,6 +206,12 @@ export async function htmlToPdf(html, option = {}) {
       });
 
       return Buffer.from(pdfBuffer);
+    } catch (err) {
+      // 已带码错误（如浏览器启动/路径类）原样重抛；页面渲染/出片失败统一 E_RENDER
+      if (isCodedError(err)) throw err;
+      throw xlsxError('E_RENDER',
+        `[xlsx2pdf] 页面渲染失败：${err.message}`,
+        `Page rendering failed: ${err.message}`);
     } finally {
       await pg.close();
     }

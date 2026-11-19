@@ -20,14 +20,20 @@
   "files": [
     "dist",
     "src",
+    "docs",
+    "bin",
+    "examples",
+    "!examples/output",
     "scripts/browser-install-lib.mjs",
     "scripts/install-browser.mjs",
+    "scripts/convert-lib.mjs",
     "index.d.ts",
     "LICENSE",
     "README.zh-CN.md",
     "CHANGELOG.md"
   ],
   "bin": {
+    "xlsx2pdf": "bin/xlsx2pdf.mjs",
     "xlsx2pdf-browser": "scripts/install-browser.mjs"
   },
   "engines": {
@@ -43,6 +49,9 @@
     "test:cjs": "node test/smoke.cjs",
     "test:media": "node test/media-guard.mjs",
     "test:detail": "node test/detail-row-guard.mjs",
+    "test:errors": "node test/error-code-guard.mjs",
+    "test:cli": "node test/cli-guard.mjs",
+    "example": "node examples/basic.mjs",
     "prepare": "husky"
   },
   "dependencies": {
