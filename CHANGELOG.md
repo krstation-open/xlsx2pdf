@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-19
+
 ### Added
 
 - README (EN/zh-CN): Deployment section opens with a "Platform support" note — the bundled Chrome auto-downloads per OS (Windows / macOS Intel & Apple Silicon / Linux), Windows/macOS need no extra system dependencies for local development, plus mirror / retry / cache-location / pinned-version details and postinstall-failure recovery.
@@ -67,6 +69,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 - Initial open-source community baseline: Excel-template marker substitution, nested dot paths, marker defaults, in-cell multi-marker mixing with local rich-text inheritance, style fidelity (merged cells / fonts / colors / borders), automatic numFmt inheritance, standard paper & page setup, bundled headless Chrome, `excel2html`, three extension points (`use` / `option.plugins`), custom marker syntax, ESM/CJS dual mode + TypeScript declarations, template-size / cell-count safety caps.
 
+[1.3.0]: https://github.com/krstation-open/xlsx2pdf/tree/v1.3.0
 [1.2.0]: https://github.com/krstation-open/xlsx2pdf/tree/v1.2.0
 [1.1.0]: https://github.com/krstation-open/xlsx2pdf/tree/v1.1.0
 [1.0.1]: https://github.com/krstation-open/xlsx2pdf/tree/v1.0.1

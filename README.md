@@ -374,10 +374,10 @@ Every feature in one table, with a checkbox for implementation status: ☑ imple
 | Overlay params w/h/ox/oy/zindex/opacity                                                               |   ☑    | 1.1.0 | shared by image / barcode / QR                                                |
 | Pure-JS image size normalization                                                                      |   ☑    | 1.1.0 | unset size normalizes to original dimensions @96DPI; no compression           |
 | Detail-row index mapping `#array.field`                                                               |   ☑    | 1.2.0 | row count fixed by the template, not a dynamic loop                           |
-| Examples directory + `npm run example` one-shot output                                                |   ☐    |       |                                                                               |
-| CLI (`xlsx2pdf convert`)                                                                              |   ☐    |       |                                                                               |
-| Stable error codes + bilingual messages + error reference doc                                         |   ☐    |       |                                                                               |
-| GitHub Actions CI + status badges                                                                     |   ☐    |       |                                                                               |
+| Examples directory + `npm run example` one-shot output                                                |   ☑    | 1.3.0 |                                                                               |
+| CLI (`xlsx2pdf convert`)                                                                              |   ☑    | 1.3.0 |                                                                               |
+| Stable error codes + bilingual messages + error reference doc                                         |   ☑    | 1.3.0 |                                                                               |
+| GitHub Actions CI + status badges                                                                     |   ☑    | 1.3.0 |                                                                               |
 | Multi-worksheet selection (`option.sheet`)                                                            |   ☐    |       |                                                                               |
 | Hidden row / column filtering                                                                         |   ☐    |       |                                                                               |
 | Reading images already embedded in the template                                                       |   ☐    |       |                                                                               |
