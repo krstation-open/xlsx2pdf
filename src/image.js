@@ -10,14 +10,37 @@ import sizeOf from 'image-size';
 import { httpGetBuffer } from './utils.js';
 import { generateCode, bufferToDataUrl } from './barcode.js';
 
+/** 来源摘要（长 URL/base64 截断，避免告警文案膨胀） */
+function sourceBrief(fieldValue) {
+  const s = String(fieldValue);
+  return s.length > 80 ? `${s.slice(0, 80)}…` : s;
+}
+
+/**
+ * 图片内容校验：image-size 能解析出宽高 = 魔数与结构有效（不盲信 content-type/扩展名）。
+ * 损坏/非图片内容降级为 null（清除标记）+ 告警，不抛错——报表业务不因单图损坏整单失败。
+ * warnings 为调用级收集数组（可选，缺省仅 console 告警，兼容深导入直调）
+ */
+function checkImageContent(buf, fieldValue, warnings) {
+  try {
+    const meta = sizeOf(buf);
+    if (meta && meta.width && meta.height) return true;
+  } catch (_) { /* 解析失败按损坏处理 */ }
+  const msg = `[engine] 图片内容损坏或不是有效图片，已按空值降级: ${sourceBrief(fieldValue)}`;
+  console.warn(msg);
+  if (warnings) warnings.push(msg);
+  return false;
+}
+
 /**
  * 根据字段值和配置，解析图片为 base64 Data URL
  *
  * @param {string} fieldValue - 字段值（base64/URL/文本）
  * @param {Object} option - 标记配置
+ * @param {string[]} [warnings] - 调用级降级告警收集数组（可选）
  * @returns {Promise<string|null>}
  */
-export async function resolveImage(fieldValue, option) {
+export async function resolveImage(fieldValue, option, warnings) {
   const type = option.type;
 
   // 条形码/二维码：将文本编码为图片
@@ -30,32 +53,44 @@ export async function resolveImage(fieldValue, option) {
 
   // 图片类型：fieldValue 可能是 base64 / URL
   if (type === 'image' || type === 'img') {
-    // base64 Data URL
+    // base64 Data URL：内容校验后再用（坏魔数/截断的 base64 不再静默出破图）
     if (fieldValue.startsWith('data:image/')) {
-      return fieldValue; // 直接使用
+      const commaIdx = fieldValue.indexOf(',');
+      const buf = Buffer.from(fieldValue.slice(commaIdx + 1), 'base64');
+      return checkImageContent(buf, fieldValue, warnings) ? fieldValue : null;
     }
 
-    // HTTP(S) URL
+    // HTTP(S) URL：下载后按内容校验，不盲信响应 content-type
     if (/^https?:\/\//i.test(fieldValue)) {
       const response = await httpGetBuffer(fieldValue, '远程图片');
+      const buf = Buffer.from(response.data);
+      if (!checkImageContent(buf, fieldValue, warnings)) return null;
       const contentType = response.headers['content-type'] || 'image/png';
       const ext = contentType.split('/')[1] || 'png';
-      return bufferToDataUrl(Buffer.from(response.data), ext);
+      return bufferToDataUrl(buf, ext);
     }
 
-    // 本地文件路径
+    // 本地文件路径：读取失败不再静默吞掉，同样记告警
     try {
       const absPath = path.isAbsolute(fieldValue) ? fieldValue : path.resolve(fieldValue);
       if (fs.existsSync(absPath)) {
         const buf = fs.readFileSync(absPath);
+        if (!checkImageContent(buf, fieldValue, warnings)) return null;
         const ext = path.extname(fieldValue).slice(1) || 'png';
         return bufferToDataUrl(buf, ext);
       }
-    } catch (_) { /* ignore */ }
+    } catch (err) {
+      const msg = `[engine] 图片文件读取失败，已按空值降级: ${sourceBrief(fieldValue)}（${err.message}）`;
+      console.warn(msg);
+      if (warnings) warnings.push(msg);
+      return null;
+    }
 
     // 不支持的值（占位符如 "--"、"/" 静默跳过）
     if (fieldValue && !/^[\-/]+$/.test(fieldValue)) {
-      console.warn(`[engine] 不支持的图片值: ${fieldValue}`);
+      const msg = `[engine] 不支持的图片值: ${fieldValue}`;
+      console.warn(msg);
+      if (warnings) warnings.push(msg);
     }
     return null;
   }
@@ -69,17 +104,18 @@ export async function resolveImage(fieldValue, option) {
  * @param {Map} cache
  * @param {string} fieldValue
  * @param {Object} option
+ * @param {string[]} [warnings] - 调用级降级告警收集数组（可选；缓存命中时不重复告警）
  * @returns {Promise<string|null>}
  */
-export async function resolveImageCached(cache, fieldValue, option) {
+export async function resolveImageCached(cache, fieldValue, option, warnings) {
   // 已是 base64 时无外部开销，且做 key 会白白多存一份大字串
   if (typeof fieldValue === 'string' && fieldValue.startsWith('data:image/')) {
-    return resolveImage(fieldValue, option);
+    return resolveImage(fieldValue, option, warnings);
   }
 
   const key = `${option.type}|${option.width}|${option.height}|${fieldValue}`;
   if (!cache.has(key)) {
-    cache.set(key, await resolveImage(fieldValue, option));
+    cache.set(key, await resolveImage(fieldValue, option, warnings));
   }
   return cache.get(key);
 }

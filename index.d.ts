@@ -101,6 +101,12 @@ export interface GenerateOptions {
    * 风险：社区版无内存准入守卫，Chrome 内存随标签页数线性增长，调大前请确认宿主内存余量（见 README 部署节）。
    */
   maxConcurrency?: number;
+  /**
+   * 取消信号（AbortSignal，如 new AbortController().signal；非法类型抛 E_OPTION_INVALID）。
+   * 协作式尽力终止：已排队请求从队列摘除不占槽位，渲染中关闭标签页中断 CDP 调用，
+   * 多页批量逐页检查；取消抛 E_CANCELLED，浏览器单例保留复用。
+   */
+  signal?: AbortSignal;
 }
 
 /** 生成入参 */
@@ -121,11 +127,12 @@ export interface GenerateParams {
 // 生成函数
 // ============================================================
 
-/** Excel 模板 → PDF（一站式生成，内置无头 Chrome） */
-export function excel2pdf(params: GenerateParams): Promise<{ pdf: Buffer; html: string }>;
+/** Excel 模板 → PDF（一站式生成，内置无头 Chrome）。
+ * warnings 为本次生成的降级告警（图片损坏/handler 失败/解码失败等，无降级时为空数组） */
+export function excel2pdf(params: GenerateParams): Promise<{ pdf: Buffer; html: string; warnings: string[] }>;
 
-/** Excel 模板 → HTML（只走 engine+render，不启动浏览器） */
-export function excel2html(params: GenerateParams): Promise<{ html: string }>;
+/** Excel 模板 → HTML（只走 engine+render，不启动浏览器）；warnings 语义同 excel2pdf */
+export function excel2html(params: GenerateParams): Promise<{ html: string; warnings: string[] }>;
 
 // ============================================================
 // 浏览器管理

@@ -5,7 +5,7 @@ import { getPageDimensions } from './constants.js';
 import { EXCEL_DEFAULTS, isMeaningfulPageSize } from './pagesetup.js';
 import { resolveBrowserPath, getConfig } from './browser.js';
 import { getSeams } from './seams.js';
-import { xlsxError, isCodedError } from './errors.js';
+import { xlsxError, isCodedError, cancelledError, throwIfAborted } from './errors.js';
 
 // ============================================================
 // 浏览器实例复用（单例）
@@ -71,9 +71,11 @@ async function getBrowser() {
   browser = await launchPromise;
   launchPromise = null;
 
-  // 监听断开事件，自动清理
-  browser.on('disconnected', () => {
-    browser = null;
+  // 监听断开事件，自动清理；身份判定：仅当断开的是当前单例引用才置 null，
+  // 避免旧实例的断开事件晚到、误清已重建的新实例（低频竞态）
+  const instance = browser;
+  instance.on('disconnected', () => {
+    if (browser === instance) browser = null;
   });
 
   return browser;
@@ -103,15 +105,34 @@ export async function closeBrowser() {
 let runningPages = 0;
 const waitQueue = [];
 
-/** 获取一个渲染槽位（超限时排队等待）；maxOverride 为调用级上限，优先于 configure 全局 */
-function acquireSlot(maxOverride) {
+/** 获取一个渲染槽位（超限时排队等待）；maxOverride 为调用级上限，优先于 configure 全局。
+ * 传 signal 时排队期间可取消：abort 后从队列摘除自身并抛 E_CANCELLED，不占槽位 */
+function acquireSlot(maxOverride, signal) {
   const max = maxOverride ?? getConfig().maxConcurrency;
   if (!max || max <= 0 || runningPages < max) {
     runningPages++;
     return Promise.resolve();
   }
-  return new Promise((resolve) => {
-    waitQueue.push(() => { runningPages++; resolve(); });
+  return new Promise((resolve, reject) => {
+    let onAbort;
+    const grant = () => {
+      if (onAbort) signal.removeEventListener('abort', onAbort);
+      runningPages++;
+      resolve();
+    };
+    waitQueue.push(grant);
+    if (signal) {
+      onAbort = () => {
+        const i = waitQueue.indexOf(grant);
+        if (i !== -1) waitQueue.splice(i, 1);
+        reject(cancelledError());
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }
 
@@ -120,6 +141,28 @@ function releaseSlot() {
   runningPages--;
   const next = waitQueue.shift();
   if (next) next();
+}
+
+/**
+ * 取消竞态：abort 时立即以 E_CANCELLED 拒绝，不等在途 CDP 调用自行结束。
+ * pg.close() 只释放页面资源，并不会中断已发出的 CDP 请求（其 Promise 可能
+ * 一直挂到超时），故渲染期取消必须靠竞态及时抛出；底层调用被遗弃后由
+ * finally 的 pg.close() 兜底清理。无 signal 时原样返回，零开销
+ */
+function raceAbort(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(cancelledError());
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+      (e) => { signal.removeEventListener('abort', onAbort); reject(e); },
+    );
+  });
 }
 
 // ============================================================
@@ -133,6 +176,7 @@ function releaseSlot() {
  * @property {Object} [margin] - mm
  * @property {'warn'|'throw'|'silent'} [fontGuard] - 模板默认字体缺失时的处理（默认 'warn'；检测由商业版接缝提供）
  * @property {number} [maxConcurrency] - 调用级并发上限（正整数，优先于 configure 全局；缺省用全局值）
+ * @property {AbortSignal} [signal] - 取消信号：排队中摘除、渲染中关闭标签页中断，统一抛 E_CANCELLED
  */
 
 /**
@@ -140,7 +184,7 @@ function releaseSlot() {
  *
  * @param {string} html - 完整 HTML 字符串
  * @param {PdfOptions} [option]
- * @returns {Promise<Buffer>}
+ * @returns {Promise<{ buffer: Buffer, warnings: string[] }>} warnings 为渲染期降级告警（如图片解码失败）
  */
 export async function htmlToPdf(html, option = {}) {
   // 正常调用链（index.js）总会传入已解析的页面设置；
@@ -153,71 +197,109 @@ export async function htmlToPdf(html, option = {}) {
   const fontGuard = option.fontGuard || 'warn';
 
   const page = getPageDimensions(pageSize, orientation);
+  const signal = option.signal;
+  const warnings = [];
+
+  // 取消预检：已 abort 的请求不进入内存准入/排队
+  throwIfAborted(signal);
 
   // 内存准入先于标签页信号量：不满足「估算+安全余量」时在队列中等待，
   // 不占用并发槽位；与 maxConcurrency 信号量取“与”合流（守卫实现由商业版接缝注入，缺省直接放行）
+  // 注：memoryAdmit 排队轮询不感知 signal（其 maxWaitMs 自带超时兜底），放行后的预检会拦截已取消请求
   const seams = getSeams();
   const releaseMemory = seams.memoryAdmit ? await seams.memoryAdmit(getConfig().memoryGuard) : () => {};
-  await acquireSlot(option.maxConcurrency);
+
+  let slotAcquired = false;
+  let pg = null;
+  let onAbort = null;
   try {
+    throwIfAborted(signal);
+    await acquireSlot(option.maxConcurrency, signal);
+    slotAcquired = true;
+
+    // getBrowser/newPage 失败（浏览器崩溃/协议超时等）同样纳入 E_RENDER 包装；
+    // 已带码错误（E_BROWSER_* 等）原样重抛
     const br = await getBrowser();
-    const pg = await br.newPage();
+    pg = await br.newPage();
+    throwIfAborted(signal);
 
-    try {
-      // 转发页面内的告警/错误（如渲染脚本的超页告警），否则调用方看不到
-      // 注：不同 puppeteer 版本的类型字符串为 'warn' 或 'warning'
-      pg.on('console', (msg) => {
-        const type = msg.type();
-        if (type === 'warn' || type === 'warning' || type === 'error') {
-          console.warn(`[page] ${msg.text()}`);
-        }
-      });
-
-      // 图片全部是内联 base64，不存在后续网络请求；load 事件已覆盖子资源加载，
-      // 用 networkidle0 只会白等一个 500ms 的空闲判定窗口（实测约 1s）
-      await pg.setContent(html, {
-        waitUntil: 'load',
-        timeout: 30000,
-      });
-
-      // 兜底：极少数图片的解码会滞后于 load，显式等一次避免打印出空白图
-      // 必须传字符串表达式：真实函数会被 minify/混淆器重命名标识符，
-      // puppeteer 序列化后注入页面执行会引用丢失（渲染脚本同理）
-      await pg.evaluate(`Promise.all(
-      Array.prototype.filter.call(document.images, function (im) { return !im.complete; })
-        .map(function (im) { return im.decode().catch(function () { /* 解码失败按原样打印 */ }); })
-    )`);
-
-      // 字体缺失守卫：检测与告警/抛错策略由商业版接缝提供（社区版无实测脚本，不检测）
-      if (seams.fontGuardCheck) await seams.fontGuardCheck(pg, fontGuard);
-
-      // 生成 PDF
-      // puppeteer 返回 Uint8Array，统一转 Buffer（toString/subarray 等语义与类型声明一致）
-      const pdfBuffer = await pg.pdf({
-        width: `${page.widthMm}mm`,
-        height: `${page.heightMm}mm`,
-        printBackground: true,
-        margin: {
-          top: `${margin.top}mm`,
-          right: `${margin.right}mm`,
-          bottom: `${margin.bottom}mm`,
-          left: `${margin.left}mm`,
-        },
-        preferCSSPageSize: false,
-      });
-
-      return Buffer.from(pdfBuffer);
-    } catch (err) {
-      // 已带码错误（如浏览器启动/路径类）原样重抛；页面渲染/出片失败统一 E_RENDER
-      if (isCodedError(err)) throw err;
-      throw xlsxError('E_RENDER',
-        `[xlsx2pdf] 页面渲染失败：${err.message}`,
-        `Page rendering failed: ${err.message}`);
-    } finally {
-      await pg.close();
+    // 渲染中取消：abort 时关闭标签页释放资源，并与在途 CDP 调用竞态及时抛 E_CANCELLED
+    // （pg.close 不中断已发出的 CDP 请求，单靠它无法及时终止，见 raceAbort）
+    if (signal) {
+      onAbort = () => { pg.close().catch(() => { /* 中断手段，失败不阻断 */ }); };
+      signal.addEventListener('abort', onAbort, { once: true });
     }
+
+    // 转发页面内的告警/错误（如渲染脚本的超页告警），否则调用方看不到
+    // 注：不同 puppeteer 版本的类型字符串为 'warn' 或 'warning'
+    pg.on('console', (msg) => {
+      const type = msg.type();
+      if (type === 'warn' || type === 'warning' || type === 'error') {
+        console.warn(`[page] ${msg.text()}`);
+      }
+    });
+
+    // 图片全部是内联 base64，不存在后续网络请求；load 事件已覆盖子资源加载，
+    // 用 networkidle0 只会白等一个 500ms 的空闲判定窗口（实测约 1s）
+    await raceAbort(pg.setContent(html, {
+      waitUntil: 'load',
+      timeout: 30000,
+    }), signal);
+
+    // 兜底：极少数图片的解码会滞后于 load，显式等一次避免打印出空白图；
+    // 解码失败仍按原样打印（行为不变），但计数回传记入 warnings，不再静默盲区
+    // 必须传字符串表达式：真实函数会被 minify/混淆器重命名标识符，
+    // puppeteer 序列化后注入页面执行会引用丢失（渲染脚本同理）
+    const decodeFailed = await raceAbort(pg.evaluate(`(function () {
+      var failed = 0;
+      var pending = Array.prototype.filter.call(document.images, function (im) { return !im.complete; });
+      return Promise.all(pending.map(function (im) {
+        return im.decode().catch(function () { failed++; });
+      })).then(function () { return failed; });
+    })()`), signal);
+    if (decodeFailed > 0) {
+      const msg = `[pdf] ${decodeFailed} 张图片解码失败，已按原样打印（产物中可能为空白/破图） / ${decodeFailed} image(s) failed to decode and were printed as-is (may appear blank/broken in the output)`;
+      console.warn(msg);
+      warnings.push(msg);
+    }
+
+    // 字体缺失守卫：检测与告警/抛错策略由商业版接缝提供（社区版无实测脚本，不检测）
+    throwIfAborted(signal);
+    if (seams.fontGuardCheck) await raceAbort(seams.fontGuardCheck(pg, fontGuard), signal);
+
+    // 生成 PDF
+    // puppeteer 返回 Uint8Array，统一转 Buffer（toString/subarray 等语义与类型声明一致）
+    throwIfAborted(signal);
+    const pdfBuffer = await raceAbort(pg.pdf({
+      width: `${page.widthMm}mm`,
+      height: `${page.heightMm}mm`,
+      printBackground: true,
+      margin: {
+        top: `${margin.top}mm`,
+        right: `${margin.right}mm`,
+        bottom: `${margin.bottom}mm`,
+        left: `${margin.left}mm`,
+      },
+      preferCSSPageSize: false,
+    }), signal);
+
+    throwIfAborted(signal);
+    return { buffer: Buffer.from(pdfBuffer), warnings };
+  } catch (err) {
+    // 取消优先：abort 引发的中断（含 pg.close 触发的 CDP 报错）统一 E_CANCELLED；
+    // 其余已带码错误（浏览器启动/路径类等）原样重抛；页面渲染/出片失败统一 E_RENDER
+    if (signal && signal.aborted) throw cancelledError();
+    if (isCodedError(err)) throw err;
+    throw xlsxError('E_RENDER',
+      `[xlsx2pdf] 页面渲染失败：${err.message}`,
+      `Page rendering failed: ${err.message}`);
   } finally {
-    releaseSlot();
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+    // close 失败（如浏览器已崩溃）不得覆盖原始错误码
+    if (pg) {
+      try { await pg.close(); } catch (_) { /* ignore */ }
+    }
+    if (slotAcquired) releaseSlot();
     releaseMemory();
   }
 }

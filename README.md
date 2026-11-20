@@ -203,6 +203,8 @@ Marker format: `${field|type_param1_param2…}`. The `|` and everything after it
 
 The `watermark` (text watermark) marker type is a Pro capability; in the community edition it raises an explicit guidance error rather than silently rendering as text. A custom handler can still return a watermark overlay — see [Extensions](#extend).
 
+Image content is validated by magic bytes and structure (same check for base64 / remote / local sources, never trusting content-type / extension alone): corrupt or non-image content degrades to empty and is recorded in the result `warnings` — one broken image never fails the whole document, see [Degradation warnings](#warnings).
+
 ### Parameter keys
 
 Image / barcode / QR share these keys (joined with `_`, e.g. `image_w120_h40_ox5`):
@@ -379,6 +381,8 @@ Every feature in one table, with a checkbox for implementation status: ☑ imple
 | Stable error codes + bilingual messages + error reference doc                                         |   ☑    | 1.3.0 |                                                                               |
 | GitHub Actions CI + status badges                                                                     |   ☑    | 1.3.0 |                                                                               |
 | Render concurrency parameterization (`maxConcurrency`)                                                |   ☑    | 1.4.0 | default 1, positive integers only; no memory guard — see Deployment risk note |
+| Generation cancellation (`option.signal` / `E_CANCELLED`)                                             |   ☑    | 1.5.0 | queue removal + render interruption, cooperative best-effort                    |
+| Degradation warnings channel (`warnings`) + image content validation                                  |   ☑    | 1.5.0 | single image/marker failures degrade instead of throwing; warnings consumable programmatically |
 | Multi-worksheet selection (`option.sheet`)                                                            |   ☐    |       |                                                                               |
 | Hidden row / column filtering                                                                         |   ☐    |       |                                                                               |
 | Reading images already embedded in the template                                                       |   ☐    |       |                                                                               |
@@ -518,6 +522,7 @@ Handler signature: `async (value, option, ctx) => result`.
 | `row` / `col` | `number` | cell row / column number (1-based)                                                                                                           |
 | `imageCache`  | `Map`    | image cache for this generation (key = type\|width\|height\|value); custom image handlers can reuse it to avoid repeated download / encoding |
 | `numFmt`      | `string` | the cell's number format, paired with `helpers.formatValue` to reuse numFmt rendering                                                        |
+| `warnings`    | `string[]` | degradation-warning collector for this generation; custom handlers can push warnings, surfaced via the result `warnings` (see [Degradation warnings](#warnings)) |
 
 **option fields** (parsed result after the marker's `|`): `type` (type name), `width` / `height` / `offsetX` / `offsetY` / `zIndex` / `opacity` / `minSize` / `lineHeight` (numeric params like `w120_h40`), `defaultValue` (`_default:` / `_默认:` / `_dft:`); other `key:value` custom pairs pass through as-is (e.g. `format:YYYY年` → `option.format`).
 
@@ -532,7 +537,7 @@ Handler signature: `async (value, option, ctx) => result`.
 | `{ text, images, watermarks }`                                                      | mixed                                                                                                                                                                                                            |
 | `null` / `undefined`                                                                | treated as empty (clears the marker)                                                                                                                                                                             |
 
-A throwing handler does not abort generation: after printing an `[engine]` error to the console, that marker is cleared as empty and the rest proceed normally. A type with the same name as a built-in overrides it (with a warning).
+A throwing handler does not abort generation: after printing an `[engine]` error to the console, that marker is cleared as empty and the rest proceed normally; the warning is also recorded in the result `warnings` (tagged `E_PLUGIN_RUNTIME`). A type with the same name as a built-in overrides it (with a warning).
 
 ```javascript
 import { use, helpers } from 'xlsx2pdf';
@@ -561,7 +566,7 @@ use({
 
 ### ② Custom field resolvers
 
-Signature `async (field, data, ctx) => value` (ctx as above; `field` already has `#array` expanded). Called in order; the first non-`undefined` return wins; if none hit, it falls back to the built-in chain (flat lookup → marker default → `option.defaults`). Use for computed fields, async data sources (database / RPC), or cross-field derived values.
+Signature `async (field, data, ctx) => value` (ctx as above; `field` already has `#array` expanded). Called in order; the first non-`undefined` return wins; if none hit, it falls back to the built-in chain (flat lookup → marker default → `option.defaults`). Use for computed fields, async data sources (database / RPC), or cross-field derived values. A resolver throwing at runtime affects the whole output's values, so it is wrapped as `E_PLUGIN_RUNTIME` and fails fast (no degradation).
 
 ```javascript
 use({
@@ -574,7 +579,7 @@ use({
 
 ### ③ Model post-processing hook
 
-Called in registration order after the engine produces the WorksheetModel and before render; you can tweak cell text / styles / row heights / column widths (returning a new model replaces it, in-place mutation returning void also works; hook ctx = `{ data, option }`).
+Called in registration order after the engine produces the WorksheetModel and before render; you can tweak cell text / styles / row heights / column widths (returning a new model replaces it, in-place mutation returning void also works; hook ctx = `{ data, option }`). A hook throwing at runtime affects the whole model, so it is wrapped as `E_PLUGIN_RUNTIME` and fails fast (no degradation).
 
 **WorksheetModel main fields** (the hook's `model` argument):
 
@@ -625,8 +630,8 @@ Engine-homologous utilities are exposed under the `helpers` namespace (`import {
 
 | Function        | Signature                                                               | Description                                                                                                                                            |
 | :-------------- | :---------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `excel2pdf`     | `({ template, data, option }) → Promise<{ pdf: Buffer, html: string }>` | one-stop generation: template parse → HTML render → headless Chrome print PDF                                                                          |
-| `excel2html`    | `({ template, data, option }) → Promise<{ html: string }>`              | same params as excel2pdf; template parse + HTML render only, no browser launch                                                                         |
+| `excel2pdf`     | `({ template, data, option }) → Promise<{ pdf: Buffer, html: string, warnings: string[] }>` | one-stop generation: template parse → HTML render → headless Chrome print PDF; warnings see [Degradation warnings](#warnings) |
+| `excel2html`    | `({ template, data, option }) → Promise<{ html: string, warnings: string[] }>`              | same params as excel2pdf; template parse + HTML render only, no browser launch                                                                         |
 | `configure`     | `(option?) → Readonly<BrowserOptions>`                                  | global browser behavior & marker syntax (module-level singleton); returns the effective config                                                         |
 | `ensureBrowser` | `(option?) → Promise<string>`                                           | ensure the bundled browser is ready (idempotent; `{ force: true }` reinstalls); returns the executable path                                            |
 | `closeBrowser`  | `() → Promise<void>`                                                    | close the reused singleton browser (usually on process exit)                                                                                           |
@@ -655,6 +660,7 @@ Engine-homologous utilities are exposed under the `helpers` namespace (`import {
 | `markerRegex`     | `RegExp` (g flag + capture group 1)               | built-in `${...}`                               | custom marker matching, takes precedence over configure global                                                                                      |
 | `markerSeparator` | `string`                                          | `'\|'`                                          | the internal "field / type_params" separator, takes precedence over configure global                                                                |
 | `maxConcurrency`  | `number` (positive integer)                       | `1`                                             | max simultaneously rendering tabs, excess queued; over configure global; raising risk in [Deployment](#deploy)                                      |
+| `signal`          | `AbortSignal`                                     | none                                            | cancellation signal: queue removal / render interruption, throws `E_CANCELLED`, see [Cancellation](#cancel)                                          |
 
 Page-setup params (pageSize / orientation / margin) precedence: **per-call option > template pageSetup > Excel built-in defaults**. Pro-only option keys (`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders`) raise an explicit guidance error when passed in the community edition; unknown option keys are likewise rejected (a typo is never silently ignored). Note: configure silently ignores the same guardrail keys rather than throwing — see configure(option) below for why.
 
@@ -705,6 +711,35 @@ This differs from the option section on purpose: option is per-generation input,
 - Marker syntax (markerRegex / markerSeparator): per-call option > configure global > built-in defaults;
 - Render concurrency (maxConcurrency): per-call option > configure global > 1;
 - Plugins: per-call `option.plugins` merges with global `use()`, same-name resolved in favor of per-call (fieldResolvers run per-call first, transformModel runs per-call last).
+
+<a id="cancel"></a>
+
+### Cancellation (option.signal)
+
+Pass an `AbortSignal` (e.g. `new AbortController().signal`) to cancel a generation: queued requests are removed from the queue without holding a slot, an in-flight render has its tab closed to interrupt the ongoing call, and multi-page batches are checked per page; cancellation throws `E_CANCELLED`, the browser singleton stays alive for reuse, and subsequent tasks are unaffected. An invalid type (not an AbortSignal) throws `E_OPTION_INVALID`.
+
+```javascript
+const ac = new AbortController();
+setTimeout(() => ac.abort(), 5000); // cancel after 5 seconds
+try {
+  const { pdf } = await excel2pdf({ template: './tpl.xlsx', data, option: { signal: ac.signal } });
+} catch (err) {
+  if (err.code === 'E_CANCELLED') { /* expected cancellation */ }
+}
+```
+
+Cancellation is **cooperative best-effort**, with no byte-level immediacy guaranteed; the Pro memory-admission queue does not observe the signal (its own timeout bounds the wait, and the post-admission pre-check still rejects an already-cancelled request).
+
+<a id="warnings"></a>
+
+### Degradation warnings (warnings)
+
+Failures scoped to a single marker/image do not throw — they degrade to empty and rendering continues: corrupt/non-image content, image read failures, in-browser decode failures, a throwing custom handler, etc. Warnings go to both the console and the result `warnings: string[]` (per-call, concurrency-safe, empty when nothing degraded); only failures affecting the whole output (template/download/guardrail/rendering, throwing fieldResolvers and transformModel) raise stable error codes. The full division of labor is in [docs/errors.md, Degradation policy](./docs/errors.md).
+
+```javascript
+const { pdf, warnings } = await excel2pdf({ template: './tpl.xlsx', data });
+if (warnings.length > 0) console.warn('This generation degraded:', warnings);
+```
 
 ---
 

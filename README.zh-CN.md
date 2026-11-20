@@ -203,6 +203,8 @@ CLI 失败时打印错误码 + 双语文案 + 文档锚点，并以非零码退�
 
 `watermark`（文本水印）标记类型属商业版 Pro，社区版模板中出现会显式报错引导，不静默当文本渲染。自定义 handler 仍可返回水印浮层，见[扩展](#extend)。
 
+图片内容按魔数与结构校验（base64 / 远程 / 本地三入口同一套，不盲信 content-type / 扩展名）：损坏或非图片内容降级为空值并记入返回结果 `warnings`，不因单图损坏整单失败，见[降级告警](#warnings)。
+
 ### 参数键
 
 图片 / 条码 / 二维码共用下列参数键（`_` 连接，如 `image_w120_h40_ox5`）：
@@ -379,6 +381,8 @@ data: { items: [{ name: '甲' }, { name: '乙' }] }
 | 稳定错误码 + 双语报错 + 错误对照文档                        |    ☑     | 1.3.0    |                                                                     |
 | GitHub Actions CI + 状态徽章                                |    ☑     | 1.3.0    |                                                                     |
 | 渲染并发参数化（`maxConcurrency`）                          |    ☑     | 1.4.0    | 默认 1，只接受正整数；无内存守卫，调大风险见部署节                |
+| 生成取消（`option.signal` / `E_CANCELLED`）                 |    ☑     | 1.5.0    | 排队摘除 + 渲染中断，协作式尽力终止                              |
+| 降级告警通道（`warnings`）+ 图片内容校验                    |    ☑     | 1.5.0    | 单图/单标记失败降级不抛错，告警可程序化消费                    |
 | 多工作表选择（`option.sheet`）                              |    ☐     |          |                                                                     |
 | 隐藏行 / 列过滤                                             |    ☐     |          |                                                                     |
 | 读取模板已嵌入的图片                                        |    ☐     |          |                                                                     |
@@ -518,6 +522,7 @@ handler 签名 `async (value, option, ctx) => result`。
 | `row` / `col` | `number` | 单元格行 / 列号（1 起）                                                                        |
 | `imageCache`  | `Map`    | 本次生成的图片缓存（key = 类型\|宽\|高\|值）；自定义图片类 handler 可复用它避免重复下载 / 编码 |
 | `numFmt`      | `string` | 单元格数字格式，配合 `helpers.formatValue` 复用 numFmt 渲染                                    |
+| `warnings`    | `string[]` | 本次生成的降级告警收集数组；自定义 handler 可 push 告警，随返回结果 `warnings` 透出（见[降级告警](#warnings)） |
 
 **option 字段**（标记 `|` 之后的解析结果）：`type`（类型名）、`width` / `height` / `offsetX` / `offsetY` / `zIndex` / `opacity` / `minSize` / `lineHeight`（`w120_h40` 等数字参数）、`defaultValue`（`_default:` / `_默认:` / `_dft:`）；其余 `key:value` 自定义键值原样透传（如 `format:YYYY年` → `option.format`）。
 
@@ -532,7 +537,7 @@ handler 签名 `async (value, option, ctx) => result`。
 | `{ text, images, watermarks }`                                                      | 混合                                                                                                                                                             |
 | `null` / `undefined`                                                                | 按空值处理（清除标记）                                                                                                                                           |
 
-handler 抛异常不会中断生成：控制台打印 `[engine]` 错误后该标记按空值清除，其余标记 / 单元格照常。与内置类型同名时覆盖内置并告警。
+handler 抛异常不会中断生成：控制台打印 `[engine]` 错误后该标记按空值清除，其余标记 / 单元格照常；告警同时记入返回结果 `warnings`（文案标注 `E_PLUGIN_RUNTIME`）。与内置类型同名时覆盖内置并告警。
 
 ```javascript
 import { use, helpers } from 'xlsx2pdf';
@@ -561,7 +566,7 @@ use({
 
 ### ② 自定义字段解析器
 
-签名 `async (field, data, ctx) => value`（ctx 同上，`field` 已完成 `#数组` 展开）。按序调用，首个非 `undefined` 返回值命中；全部未命中则回退内置链路（扁平取值 → 标记内默认值 → `option.defaults`）。适用：计算字段、异步数据源（数据库 / RPC）、跨字段派生值。
+签名 `async (field, data, ctx) => value`（ctx 同上，`field` 已完成 `#数组` 展开）。按序调用，首个非 `undefined` 返回值命中；全部未命中则回退内置链路（扁平取值 → 标记内默认值 → `option.defaults`）。适用：计算字段、异步数据源（数据库 / RPC）、跨字段派生值。解析器运行抛错影响整份产物取值，包装 `E_PLUGIN_RUNTIME` 快速失败（不降级）。
 
 ```javascript
 use({
@@ -574,7 +579,7 @@ use({
 
 ### ③ 模型后处理钩子
 
-engine 产出 WorksheetModel 之后、render 之前按注册顺序调用，可微调单元格文本 / 样式 / 行高列宽（返回新 model 则替换，原地修改返回 void 亦可；钩子 ctx = `{ data, option }`）。
+engine 产出 WorksheetModel 之后、render 之前按注册顺序调用，可微调单元格文本 / 样式 / 行高列宽（返回新 model 则替换，原地修改返回 void 亦可；钩子 ctx = `{ data, option }`）。钩子运行抛错影响整份模型，包装 `E_PLUGIN_RUNTIME` 快速失败（不降级）。
 
 **WorksheetModel 主要字段**（即钩子入参 `model`）：
 
@@ -625,8 +630,8 @@ use({
 
 | 函数            | 签名                                                                    | 说明                                                                                       |
 | :-------------- | :---------------------------------------------------------------------- | :----------------------------------------------------------------------------------------- |
-| `excel2pdf`     | `({ template, data, option }) → Promise<{ pdf: Buffer, html: string }>` | 一站式生成：模板解析 → HTML 渲染 → 无头 Chrome 打印 PDF                                    |
-| `excel2html`    | `({ template, data, option }) → Promise<{ html: string }>`              | 参数与 excel2pdf 一致，只走模板解析 + HTML 渲染，不启动浏览器                              |
+| `excel2pdf`     | `({ template, data, option }) → Promise<{ pdf: Buffer, html: string, warnings: string[] }>` | 一站式生成：模板解析 → HTML 渲染 → 无头 Chrome 打印 PDF；warnings 见[降级告警](#warnings) |
+| `excel2html`    | `({ template, data, option }) → Promise<{ html: string, warnings: string[] }>`              | 参数与 excel2pdf 一致，只走模板解析 + HTML 渲染，不启动浏览器                              |
 | `configure`     | `(option?) → Readonly<BrowserOptions>`                                  | 浏览器行为与标记语法全局配置（模块级单例），返回当前生效配置                               |
 | `ensureBrowser` | `(option?) → Promise<string>`                                           | 确保内置浏览器就绪（幂等；`{ force: true }` 强制重装），返回可执行文件路径                 |
 | `closeBrowser`  | `() → Promise<void>`                                                    | 关闭复用的单例浏览器（通常在进程退出时调用）                                               |
@@ -655,6 +660,7 @@ use({
 | `markerRegex`     | `RegExp`（g 标志 + 捕获组 1）                     | 内置 `${...}`                 | 自定义标记匹配规则，优先于 configure 全局                                                        |
 | `markerSeparator` | `string`                                          | `'\|'`                        | 标记内「字段 / 类型\_参数」分隔符，优先于 configure 全局                                         |
 | `maxConcurrency`  | `number`（正整数）                                | `1`                           | 同时渲染的标签页上限，超限排队；优先于 configure 全局；调大风险见[部署](#deploy) |
+| `signal`          | `AbortSignal`                                     | 无                            | 取消信号：排队摘除 / 渲染中断，抛 `E_CANCELLED`，见[取消](#cancel)              |
 
 页面设置类（pageSize / orientation / margin）优先级：**调用级 option > 模板 pageSetup > Excel 内建默认**。Pro 专属 option 键（`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders`）社区版传入即显式报错引导；未知 option 键同样拒绝（拼错入参不被静默忽略）。注意：configure 对同类护栏键是静默忽略而非报错，差异原因见下文 configure(option)。
 
@@ -705,6 +711,35 @@ configure({
 - 标记语法（markerRegex / markerSeparator）：调用级 option > configure 全局 > 内置默认；
 - 渲染并发（maxConcurrency）：调用级 option > configure 全局 > 1；
 - 插件：调用级 `option.plugins` 与全局 `use()` 合并，同名以调用级为准（fieldResolvers 调用级先执行，transformModel 调用级后执行）。
+
+<a id="cancel"></a>
+
+### 取消（option.signal）
+
+传入 `AbortSignal`（如 `new AbortController().signal`）可取消生成：已排队请求从队列摘除不占槽位，渲染中关闭标签页中断进行中的调用，多页批量逐页检查；取消抛 `E_CANCELLED`，浏览器单例保留复用，后续任务不受影响。非法类型（非 AbortSignal）抛 `E_OPTION_INVALID`。
+
+```javascript
+const ac = new AbortController();
+setTimeout(() => ac.abort(), 5000); // 5 秒后取消
+try {
+  const { pdf } = await excel2pdf({ template: './tpl.xlsx', data, option: { signal: ac.signal } });
+} catch (err) {
+  if (err.code === 'E_CANCELLED') { /* 预期内的取消 */ }
+}
+```
+
+取消是**协作式尽力终止**，不保证字节级即时；商业版内存准入排队不感知 signal（其自身超时兜底，放行后的预检仍会拦截已取消请求）。
+
+<a id="warnings"></a>
+
+### 降级告警（warnings）
+
+影响范围限于单个标记/图片的失败不抛错，按空值降级继续渲染：图片内容损坏/非图片、图片读取失败、浏览器内解码失败、自定义 handler 抛错等。告警同时输出到 console 与返回结果的 `warnings: string[]`（逐次生成独立，并发安全，无降级时为空数组）；影响整份产物的失败（模板/下载/护栏/渲染、fieldResolvers 与 transformModel 抛错）才抛稳定错误码。完整分工见 [docs/errors.md 降级策略披露](./docs/errors.md)。
+
+```javascript
+const { pdf, warnings } = await excel2pdf({ template: './tpl.xlsx', data });
+if (warnings.length > 0) console.warn('本次生成有降级:', warnings);
+```
 
 ---
 

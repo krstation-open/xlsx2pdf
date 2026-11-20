@@ -37,3 +37,15 @@ export function xlsxError(code, zh, en) {
 export function isCodedError(err) {
   return err instanceof Xlsx2pdfError;
 }
+
+/** 构造取消错误（option.signal 触发；排队摘除/渲染中断/入口预检共用） */
+export function cancelledError() {
+  return xlsxError('E_CANCELLED',
+    '[xlsx2pdf] 生成已取消（option.signal 已 abort）',
+    'Generation cancelled (option.signal aborted).');
+}
+
+/** signal 已 abort 时抛 E_CANCELLED（未传 signal 时零开销） */
+export function throwIfAborted(signal) {
+  if (signal && signal.aborted) throw cancelledError();
+}

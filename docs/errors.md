@@ -28,7 +28,7 @@ try {
 | [`E_DATA_TYPE`](#e_data_type) | `data` 不是对象 | 传普通对象（数组批量属 Pro） |
 | [`E_OPTION_PRO`](#e_option_pro) | 传入 Pro 专属 option / 数组 data / 对象型 pageSize | 移除该参数或升级 Pro |
 | [`E_OPTION_UNKNOWN`](#e_option_unknown) | 未知 option 键（含拼写错误） | 对照 README option 表 |
-| [`E_OPTION_INVALID`](#e_option_invalid) | option / configure 值类型非法（含 `maxConcurrency` 非正整数） | 按提示传合法值 |
+| [`E_OPTION_INVALID`](#e_option_invalid) | option / configure 值类型非法（含 `maxConcurrency` 非正整数、`signal` 非 AbortSignal） | 按提示传合法值 |
 | [`E_MARKER_REGEX`](#e_marker_regex) | 自定义标记正则不合契约 | g 标志 + 捕获组 1 |
 | [`E_MARKER_SEPARATOR`](#e_marker_separator) | `markerSeparator` 为空或非字符串 | 传非空字符串 |
 | [`E_MARKER_PRO`](#e_marker_pro) | 模板使用未注册的 Pro 标记类型（watermark） | 移除标记或升级 Pro |
@@ -47,8 +47,10 @@ try {
 | [`E_BROWSER_DEPS`](#e_browser_deps) | Linux 缺 Chrome 系统依赖库 | 按 apt 清单安装缺失库 |
 | [`E_BROWSER_DOWNLOAD`](#e_browser_download) | 内置 Chrome 下载重试耗尽 | 检查网络后手动补装 |
 | [`E_PLUGIN_INVALID`](#e_plugin_invalid) | 插件结构非法（非对象 / 扩展点非函数） | 对照 README 扩展契约 |
+| [`E_PLUGIN_RUNTIME`](#e_plugin_runtime) | 插件运行期失败（fieldResolvers / transformModel 抛错） | 修插件实现；handler 抛错不抛此码而是降级告警 |
 | [`E_CODE_TYPE`](#e_code_type) | `generateCode` 类型不支持 | 传 barcode / qrcode |
-| [`E_RENDER`](#e_render) | 页面渲染 / 出片失败 | 看原始错误；多为超时或页面异常 |
+| [`E_RENDER`](#e_render) | 页面渲染 / 出片失败（含新开标签页失败） | 看原始错误；多为超时或页面异常 |
+| [`E_CANCELLED`](#e_cancelled) | `option.signal` 已 abort（入口预检 / 排队摘除 / 渲染中断） | 预期行为；需要产物时不取消或重试 |
 
 ---
 
@@ -100,8 +102,8 @@ Check the supported-key list in the message and the option table in the README.
 <a id="e_option_invalid"></a>
 ### E_OPTION_INVALID
 
-option / configure 的值类型非法。社区版恒生效的校验：`maxConcurrency` 只接受正整数（0/负数/小数/非数值均拒绝，无「传 0 不限」语义）；其余如 `pageRotate` 非 boolean、`fontGuard` 不在策略列表等校验仅在 Pro 经接缝声明相应键后生效；纯社区版下这些键会更早被 `E_OPTION_PRO`（option）拦截或静默忽略（configure）。
-An option/configure value has an invalid type. Always enforced in the community edition: `maxConcurrency` accepts positive integers only (0 / negatives / fractions / non-numbers are rejected; there is no "0 = unlimited" semantics). Other checks (e.g. non-boolean `pageRotate`, `fontGuard` outside the strategy list) only apply after Pro declares the keys via seams; in the pure community edition such keys are intercepted earlier by `E_OPTION_PRO` (option) or silently ignored (configure).
+option / configure 的值类型非法。社区版恒生效的校验：`maxConcurrency` 只接受正整数（0/负数/小数/非数值均拒绝，无「传 0 不限」语义）；`option.signal` 只接受 AbortSignal；其余如 `pageRotate` 非 boolean、`fontGuard` 不在策略列表等校验仅在 Pro 经接缝声明相应键后生效；纯社区版下这些键会更早被 `E_OPTION_PRO`（option）拦截或静默忽略（configure）。
+An option/configure value has an invalid type. Always enforced in the community edition: `maxConcurrency` accepts positive integers only (0 / negatives / fractions / non-numbers are rejected; there is no "0 = unlimited" semantics); `option.signal` accepts an AbortSignal only. Other checks (e.g. non-boolean `pageRotate`, `fontGuard` outside the strategy list) only apply after Pro declares the keys via seams; in the pure community edition such keys are intercepted earlier by `E_OPTION_PRO` (option) or silently ignored (configure).
 
 **修复 / Fix**：按报错提示的合法取值传参。
 Pass one of the accepted values listed in the message.
@@ -268,6 +270,9 @@ Invalid plugin shape passed to `use()` / `option.plugins`: a plugin must be an o
 **修复 / Fix**：对照 README「扩展与二次开发」的插件契约修正结构。
 Fix the shape against the plugin contract in the README "Extending" section.
 
+与运行期码的分工：本码只管**注册期结构校验**；插件函数注册合法但运行时报错属 `E_PLUGIN_RUNTIME`（handler 抛错除外，见降级策略披露）。
+Division of labor with the runtime code: this code covers **registration-time shape validation** only; a well-shaped plugin function throwing at runtime is `E_PLUGIN_RUNTIME` (except marker handlers, see the degradation policy below).
+
 <a id="e_code_type"></a>
 ### E_CODE_TYPE
 
@@ -280,8 +285,60 @@ Pass `barcode` (Code128) or `qrcode`; more symbologies are planned for later ver
 <a id="e_render"></a>
 ### E_RENDER
 
-页面渲染或 PDF 出片失败（原始错误附在报错中，常见为 setContent 超时）。
-Page rendering or PDF generation failed (original error included; commonly a setContent timeout).
+页面渲染或 PDF 出片失败（原始错误附在报错中，常见为 setContent 超时）；新开标签页失败（浏览器崩溃/协议超时）同样归入本码。
+Page rendering or PDF generation failed (original error included; commonly a setContent timeout); failure to open a new tab (browser crash / protocol timeout) is also covered.
+
+标签页关闭失败（如浏览器已崩溃）不会覆盖原始错误码；`option.signal` 取消引发的中断优先报 `E_CANCELLED`。
+A failed tab close (e.g. the browser already crashed) never masks the original error code; interruptions caused by `option.signal` cancellation are reported as `E_CANCELLED` first.
 
 **修复 / Fix**：按原始错误排查；模板过大时先参考 `E_SIZE_CAP` / `E_CELL_CAP` 精简模板。
 Follow the original error; for oversized templates slim them down first (see `E_SIZE_CAP` / `E_CELL_CAP`).
+
+<a id="e_plugin_runtime"></a>
+### E_PLUGIN_RUNTIME
+
+插件运行期失败：`fieldResolvers` 某项或 `transformModel` 钩子执行时抛错（报错含序号与字段上下文，原始错误附后）。取值/模型钩子失败影响整份产物，降级无意义，故快速失败；已带码错误（插件自行抛 `Xlsx2pdfError`）原样重抛不二次包装。
+A plugin failed at runtime: a `fieldResolvers` entry or a `transformModel` hook threw (the message includes the index and field context, with the original error appended). Resolver/hook failures affect the whole output, so they fail fast instead of degrading; errors already carrying a code (a plugin throwing `Xlsx2pdfError` itself) are rethrown unchanged.
+
+`markerTypes` handler 抛错**不抛本码**：单标记失败按空值降级继续渲染，告警记入返回结果 `warnings`（文案标注本码），见下方降级策略披露。
+A throwing `markerTypes` handler does **not** raise this code: the single marker degrades to empty and rendering continues, with a warning (tagged with this code) recorded in the result `warnings` — see the degradation policy below.
+
+**修复 / Fix**：按报错中的序号定位插件实现并修复；`helpers` 是调用方直调的纯函数，其运行期错误属调用方责任，不包装为本码。
+Locate the plugin implementation by the index in the message and fix it; `helpers` are plain functions called directly by you, so their runtime errors are the caller's responsibility and are not wrapped into this code.
+
+<a id="e_cancelled"></a>
+### E_CANCELLED
+
+`option.signal`（AbortSignal）已 abort：入口预检、排队中摘除、渲染中关闭标签页中断，任一检查点命中即抛本码。
+`option.signal` (an AbortSignal) has been aborted: the entry pre-check, queue removal while waiting, or tab-close interruption during rendering — any checkpoint hit raises this code.
+
+取消为**协作式尽力终止**：不保证字节级即时；已排队请求从队列摘除不占槽位，已开标签页关闭，浏览器单例保留复用；多页批量逐页检查。商业版内存准入排队（memoryAdmit）不感知 signal，其 maxWaitMs 自带超时兜底，放行后的预检会拦截已取消请求。
+Cancellation is **cooperative best-effort**: no byte-level immediacy is guaranteed; queued requests are removed without holding a slot, open tabs are closed, and the shared browser instance stays alive for reuse; multi-page batches are checked per page. The Pro memory-admission queue (memoryAdmit) does not observe the signal (its own maxWaitMs bounds the wait); the post-admission pre-check still rejects an already-cancelled request.
+
+**修复 / Fix**：预期行为，无需修复；需要产物时不取消或重新发起生成。
+Expected behavior, nothing to fix; generate again without aborting if the output is needed.
+
+---
+
+## 降级策略披露 / Degradation policy
+
+并非所有失败都抛错：影响范围限于单个标记/图片的失败按空值降级继续渲染，告警同时输出到 console 与返回结果的 `warnings: string[]`（逐次生成独立，无降级时为空数组）；影响整份产物的失败才抛错。
+Not every failure throws: failures scoped to a single marker/image degrade to empty and rendering continues, with warnings emitted to both the console and the result `warnings: string[]` (per-call, empty when nothing degraded); only failures affecting the whole output throw.
+
+| 场景 Scenario | 行为 Behavior |
+| :-- | :-- |
+| 图片内容损坏/非图片（base64/远程/本地，按魔数与结构校验，不盲信 content-type） | 降级清除标记 + warning |
+| 图片文件读取失败 / 不支持的图片值 | 降级清除标记 + warning |
+| 浏览器内图片解码失败 | 按原样打印（可能空白/破图）+ warning |
+| `markerTypes` handler 抛错 | 降级清除标记 + warning（文案标注 `E_PLUGIN_RUNTIME`） |
+| `fieldResolvers` / `transformModel` 抛错 | 抛 `E_PLUGIN_RUNTIME`（已带码原样重抛） |
+| 模板读取/解析、下载、纸张、护栏、渲染类失败 | 抛对应稳定码（见码表） |
+
+| Scenario | Behavior |
+| :-- | :-- |
+| Corrupt / non-image content (base64 / remote / local, validated by magic bytes and structure, never trusting content-type alone) | Degrade: marker cleared + warning |
+| Image file read failure / unsupported image value | Degrade: marker cleared + warning |
+| In-browser image decode failure | Printed as-is (may be blank/broken) + warning |
+| A `markerTypes` handler throws | Degrade: marker cleared + warning (tagged `E_PLUGIN_RUNTIME`) |
+| A `fieldResolvers` / `transformModel` throws | Throws `E_PLUGIN_RUNTIME` (coded errors rethrown unchanged) |
+| Template load/parse, download, paper, guardrail, rendering failures | Throw the corresponding stable code (see the table) |

@@ -11,7 +11,7 @@ import { resolveImageCached } from './image.js';
  * barcode/qrcode 为生成图（无原图概念），未设时维持默认 100×20 */
 export async function imageLikeHandler(value, option, ctx) {
   if (value === undefined || value === null || value === '') return null;
-  const dataUrl = await resolveImageCached(ctx.imageCache, value, option);
+  const dataUrl = await resolveImageCached(ctx.imageCache, value, option, ctx.warnings);
   if (!dataUrl) return null;
   const natural = option.type === 'image' || option.type === 'img';
   return {

@@ -172,6 +172,46 @@ try {
     () => helpers.generateCode('ean13', '123'),
     'E_CODE_TYPE', '不支持的条码类型', 'Unsupported code type');
 
+  // ============ 7b. 插件运行期类（1.5.0：E_PLUGIN_RUNTIME） ============
+  await expectCode('fieldResolver 运行抛错',
+    () => excel2html({
+      template: tpl,
+      option: { plugins: [{ fieldResolvers: [() => { throw new Error('resolver boom'); }] }] },
+    }),
+    'E_PLUGIN_RUNTIME', '字段解析器运行失败', 'Field resolver failed');
+
+  await expectCode('transformModel 运行抛错',
+    () => excel2html({
+      template: tpl,
+      option: { plugins: [{ transformModel: () => { throw new Error('hook boom'); } }] },
+    }),
+    'E_PLUGIN_RUNTIME', '模型后处理钩子运行失败', 'Model post-processing hook failed');
+
+  // 插件自行抛带码错误：原样重抛不二次包装
+  await expectCode('插件抛带码错误原样重抛',
+    () => excel2html({
+      template: tpl,
+      option: { plugins: [{ fieldResolvers: [() => { throw new Xlsx2pdfError('E_DATA_TYPE', '自定义带码错误 custom coded'); }] }] },
+    }),
+    'E_DATA_TYPE', '自定义带码错误', 'custom coded');
+
+  // ============ 7c. 取消类（1.5.0：E_CANCELLED / signal 校验） ============
+  await expectCode('signal 非 AbortSignal',
+    () => excel2html({ template: tpl, option: { signal: 'not-a-signal' } }),
+    'E_OPTION_INVALID', 'option.signal 只接受 AbortSignal', 'option.signal accepts an AbortSignal only');
+
+  const preAborted = new AbortController();
+  preAborted.abort();
+  await expectCode('预 abort 快速失败（excel2html）',
+    () => excel2html({ template: tpl, option: { signal: preAborted.signal } }),
+    'E_CANCELLED', '生成已取消', 'Generation cancelled');
+
+  const preAborted2 = new AbortController();
+  preAborted2.abort();
+  await expectCode('预 abort 快速失败（excel2pdf）',
+    () => excel2pdf({ template: tpl, option: { signal: preAborted2.signal } }),
+    'E_CANCELLED', '生成已取消', 'Generation cancelled');
+
   // ============ 8. 浏览器路径类 ============
   await expectCode('外部浏览器路径不存在',
     async () => {

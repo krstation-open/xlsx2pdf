@@ -14,7 +14,7 @@ import {
 } from './registry.js';
 import { imageLikeHandler } from './markers.js';
 import { normalizeImageSizes } from './image.js';
-import { xlsxError, isCodedError } from './errors.js';
+import { xlsxError, isCodedError, throwIfAborted } from './errors.js';
 
 // 列宽度量基准 MDW：核心按公开常数 7（Calibri 11pt）换算；
 // 按字体/字号精确取值的增强实现由商业版经 seams.resolveMdw 注入
@@ -235,6 +235,8 @@ export function colWidthToPx(width, mdw) {
  * @property {string} [markerSeparator] - 标记内部「字段 / 类型_参数」分隔符（默认 |）
  * @property {number} [maxTemplateSize] - 模板文件体积上限（字节；超限报错，0/负数不限）
  * @property {number} [maxCells] - 模板单元格数上限（实际行×列；超限报错，0/负数不限）
+ * @property {string[]} [warnings] - 调用级降级告警收集数组（入口创建，逐次生成独立，并发安全）
+ * @property {AbortSignal} [signal] - 取消信号（已 abort 时抛 E_CANCELLED）
  */
 
 /**
@@ -263,6 +265,9 @@ function hasCellVisualStyle(cell) {
  * @returns {Promise<Object>} WorksheetModel
  */
 export async function processTemplate(templateSource, data, option = {}) {
+  // 取消预检：已 abort 的请求不进入模板加载/下载
+  throwIfAborted(option.signal);
+
   // 1. 加载模板（读取/下载失败统一包装为 E_TEMPLATE_LOAD；已带码的下载错误原样重抛）
   let buffer;
   try {
@@ -609,12 +614,20 @@ export async function processTemplate(templateSource, data, option = {}) {
           field = field.replace(/#([^.]+)\./, `$1.${idx + 1}.`);
         }
 
-        const markerCtx = { data, field, row: cell.row, col: cell.col, imageCache, numFmt: cell.numFmt };
+        const markerCtx = { data, field, row: cell.row, col: cell.col, imageCache, numFmt: cell.numFmt, warnings: option.warnings };
 
         // 字段取值链路：fieldResolvers 依次调用（首个非 undefined 命中）→ flatData 扁平取值 → 标记内默认值 → 全局默认值
+        // 解析器运行失败影响整份产物取值，降级无意义：包装 E_PLUGIN_RUNTIME 快速失败（已带码原样重抛）
         let fieldValue;
-        for (const resolver of effective.fieldResolvers) {
-          fieldValue = await resolver(field, data, markerCtx);
+        for (let ri = 0; ri < effective.fieldResolvers.length; ri++) {
+          try {
+            fieldValue = await effective.fieldResolvers[ri](field, data, markerCtx);
+          } catch (err) {
+            if (isCodedError(err)) throw err;
+            throw xlsxError('E_PLUGIN_RUNTIME',
+              `[xlsx2pdf] 字段解析器运行失败（fieldResolvers[${ri}]，字段: ${field}）：${err.message}`,
+              `Field resolver failed (fieldResolvers[${ri}], field: ${field}): ${err.message}`);
+          }
           if (fieldValue !== undefined) break;
         }
         if (fieldValue === undefined) {
@@ -644,7 +657,11 @@ export async function processTemplate(templateSource, data, option = {}) {
         try {
           result = await handler(fieldValue, opt, markerCtx);
         } catch (err) {
+          // 单标记失败不拖垮整单：维持降级（清除标记继续渲染），告警入 warnings 通道并标注运行期码
           console.error(`[engine] 标记处理失败 (字段: ${field}, 类型: ${opt.type}):`, err.message);
+          if (option.warnings) {
+            option.warnings.push(`[engine] 标记处理失败 (字段: ${field}, 类型: ${opt.type}): ${err.message}（E_PLUGIN_RUNTIME，已按空值降级）`);
+          }
         }
 
         // 应用 handler 结果：string → 文本替换；{ text, images } → 混合；null/undefined → 清除标记
@@ -733,8 +750,17 @@ export async function processTemplate(templateSource, data, option = {}) {
   };
 
   // 6. 模型后处理钩子（transformModel，按注册顺序调用；返回新 model 则替换）
-  for (const hook of effective.transformModels) {
-    const out = await hook(model, { data, option });
+  // 钩子运行失败影响整份模型，降级无意义：包装 E_PLUGIN_RUNTIME 快速失败（已带码原样重抛）
+  for (let hi = 0; hi < effective.transformModels.length; hi++) {
+    let out;
+    try {
+      out = await effective.transformModels[hi](model, { data, option });
+    } catch (err) {
+      if (isCodedError(err)) throw err;
+      throw xlsxError('E_PLUGIN_RUNTIME',
+        `[xlsx2pdf] 模型后处理钩子运行失败（transformModel[${hi}]）：${err.message}`,
+        `Model post-processing hook failed (transformModel[${hi}]): ${err.message}`);
+    }
     if (out) model = out;
   }
 

@@ -29,7 +29,7 @@ import { use } from './registry.js';
 import { flattenObject, getFileBuffer, parseMarkerOption, validateMarkerRegex } from './utils.js';
 import { formatValue } from './numfmt.js';
 import { generateCode, bufferToDataUrl } from './barcode.js';
-import { Xlsx2pdfError, xlsxError } from './errors.js';
+import { Xlsx2pdfError, xlsxError, throwIfAborted } from './errors.js';
 
 /** 商业版 Pro 能力咨询方式（统一文案，见 README「社区版 vs Pro」） */
 const PRO_CONTACT = '商业版咨询：business@krstation.com';
@@ -98,9 +98,16 @@ function validateParams({ template, data, option = {} }) {
   // 生效链路在 excel2pdf（excel2html 不启动浏览器，仅校验不消费）
   if (option.maxConcurrency !== undefined) validateMaxConcurrency(option.maxConcurrency, 'option');
 
+  // 取消信号（1.5.0 起）：只接受 AbortSignal，两个生成 API 同口径
+  if (option.signal !== undefined && !(option.signal instanceof AbortSignal)) {
+    throw xlsxError('E_OPTION_INVALID',
+      `[xlsx2pdf] option.signal 只接受 AbortSignal（如 new AbortController().signal），收到：${typeof option.signal}`,
+      `option.signal accepts an AbortSignal only (e.g. new AbortController().signal), received: ${typeof option.signal}.`);
+  }
+
   // 未知 option 键同样拒绝：拼错入参不应被静默忽略
-  // （plugins/markerRegex/markerSeparator/maxConcurrency 为社区版能力，恒放行）
-  const ALLOWED_KEYS = ['pageSize', 'orientation', 'margin', 'defaults', 'plugins', 'markerRegex', 'markerSeparator', 'maxConcurrency'];
+  // （plugins/markerRegex/markerSeparator/maxConcurrency/signal 为社区版能力，恒放行）
+  const ALLOWED_KEYS = ['pageSize', 'orientation', 'margin', 'defaults', 'plugins', 'markerRegex', 'markerSeparator', 'maxConcurrency', 'signal'];
   for (const [key, [cap]] of Object.entries(PRO_OPTION_KEYS)) {
     if (hasCapability(cap)) ALLOWED_KEYS.push(key);
   }
@@ -145,10 +152,15 @@ export function getVersion() {
  * @param {Object|Object[]} [params.data] - 数据对象（支持嵌套点路径取值）；数组多页需商业版
  *   注册 arrayData 能力；缺省或空数组时按 [{}] 渲染一页空模板
  * @param {Object} [params.option] - 配置项（页面设置类优先级：用户传参 > 模板 pageSetup > Excel 内建默认，见 pagesetup.js）
- * @returns {Promise<{ html: string, pages: Array }>} pages 为逐页解析结果（内部使用）
+ * @returns {Promise<{ html: string, pages: Array, warnings: string[] }>} pages 为逐页解析结果（内部使用）；
+ *   warnings 为本次生成的降级告警（图片损坏/handler 失败等，逐次独立，并发安全）
  */
 async function buildHtml({ template, data, option = {} }) {
   validateParams({ template, data, option });
+  throwIfAborted(option.signal);
+
+  // 降级告警收集：逐次生成独立数组，经 markerCtx.warnings 透传给内置/插件 handler
+  const warnings = [];
 
   // data 缺省或空数组时兑底为 [{}]，渲染一页空模板
   const dataItems = Array.isArray(data)
@@ -157,6 +169,8 @@ async function buildHtml({ template, data, option = {} }) {
 
   const pages = [];
   for (const item of dataItems) {
+    // 逐页取消检查：多页批量中途 abort 不再继续后续页
+    throwIfAborted(option.signal);
     const model = await processTemplate(template, item, {
       defaults: option.defaults,
       plugins: option.plugins,
@@ -167,6 +181,8 @@ async function buildHtml({ template, data, option = {} }) {
       // 模板规模守卫：调用级 > 全局 > 内置默认（见 browser.js config）
       maxCells: option.maxCells ?? getConfig().maxCells,
       maxTemplateSize: option.maxTemplateSize ?? getConfig().maxTemplateSize,
+      warnings,
+      signal: option.signal,
     });
 
     // 页面设置统一解析：用户 > 模板 pageSetup > Excel 内建默认（见 pagesetup.js）
@@ -224,7 +240,7 @@ async function buildHtml({ template, data, option = {} }) {
     html = `${head}\n${fragments.join('\n')}\n</body>\n</html>`;
   }
 
-  return { html, pages };
+  return { html, pages, warnings };
 }
 
 /**
@@ -239,7 +255,8 @@ async function buildHtml({ template, data, option = {} }) {
  * @param {Object} [params.option.margin] - 页边距 mm { top, right, bottom, left }，逐字段合并，
  *   模板未设时兜底为 Excel 内建默认（上下 19.1 / 左右 17.8mm）
  * @param {Object} [params.option.defaults] - 全局默认值 { 字段名: '默认值' }
- * @returns {Promise<{ pdf: Buffer, html: string }>}
+ * @param {AbortSignal} [params.option.signal] - 取消信号：排队中摘除、渲染中关闭标签页中断，抛 E_CANCELLED
+ * @returns {Promise<{ pdf: Buffer, html: string, warnings: string[] }>} warnings 为降级告警（无降级时为空数组）
  */
 export async function excel2pdf({ template, data, option = {} }) {
   const seams = getSeams();
@@ -256,7 +273,7 @@ export async function excel2pdf({ template, data, option = {} }) {
   // 调用级并发调大时的运行期风险告警（校验已在 validateParams 统一做过）
   if (option.maxConcurrency !== undefined) warnConcurrencyRisk(option.maxConcurrency);
 
-  const { html, pages } = await buildHtml({ template, data, option });
+  const { html, pages, warnings } = await buildHtml({ template, data, option });
 
   // fontGuard：调用级 > 全局 configure > 默认 'warn'；非法值抛错（与 configure 一致）
   const fontGuard = option.fontGuard ?? getConfig().fontGuard;
@@ -268,30 +285,33 @@ export async function excel2pdf({ template, data, option = {} }) {
   }
 
   const firstPage = pages[0];
-  let pdf = await htmlToPdf(html, {
+  const rendered = await htmlToPdf(html, {
     pageSize: firstPage.pageSize,
     orientation: firstPage.orientation,
     margin: firstPage.margin,
     fontGuard,
     maxConcurrency: option.maxConcurrency,
+    signal: option.signal,
   });
+  let pdf = rendered.buffer;
+  warnings.push(...rendered.warnings);
 
   // 横向标记补写（商业版接缝）：Chromium 只用「交换 MediaBox 宽高」表达横向且绝不写 /Rotate，
   // WPS 打印模块 / Clodop 按 /Rotate 选纸会退回纵向纸。纵向页由实现按几何自行判定并原样返回
   if (pageRotate && seams.rotateLandscape) pdf = await seams.rotateLandscape(pdf);
 
-  return { pdf, html };
+  return { pdf, html, warnings };
 }
 
 /**
  * Excel 模板 → HTML（只走 engine+render，不启动浏览器）
  *
  * 参数与 excel2pdf 完全一致
- * @returns {Promise<{ html: string }>}
+ * @returns {Promise<{ html: string, warnings: string[] }>} warnings 为降级告警（无降级时为空数组）
  */
 export async function excel2html({ template, data, option = {} }) {
-  const { html } = await buildHtml({ template, data, option });
-  return { html };
+  const { html, warnings } = await buildHtml({ template, data, option });
+  return { html, warnings };
 }
 
 /**
