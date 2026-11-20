@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-20
+
+### Added
+
+- Cancellation support: `option.signal` accepts an `AbortSignal` on both generation APIs (invalid types throw `E_OPTION_INVALID`). Already-aborted requests fail fast at entry; checkpoints run between pages and before memory admission / slot acquisition; queued requests are removed from the wait queue on abort (no slot held); an in-flight render is interrupted and rejects with the new `E_CANCELLED` code. Cancellation is cooperative best-effort: queued requests are removed, open tabs closed, the browser singleton kept for reuse. Pro's memory-admission polling does not observe the signal (its own `maxWaitMs` timeout applies); documented boundary.
+- Structured `warnings` channel on results: `excel2pdf → { pdf, html, warnings }`, `excel2html → { html, warnings }` (additive, backward compatible). Per-generation array (concurrency-safe), collecting engine-side degradation warnings only; existing `console.warn` output is preserved. Page-console forwarding stays on console (no noise in the array).
+- Image content validation at all three entry points (base64 DataUrl, HTTP download, local file) via the existing `image-size` dependency — magic bytes / structure are verified instead of trusting content-type or extension. Corrupted or non-image content degrades to empty (marker cleared) with a warning, consistent with the existing "unsupported image value" semantics — one broken image never fails the whole report. Local file read failures are now warned instead of silently swallowed.
+- New error code `E_PLUGIN_RUNTIME` (code table 26 → 28): `fieldResolvers` / `transformModel` runtime failures now fail fast with a coded bilingual error (previously uncoded); already-coded errors rethrow unchanged. Marker `handler` failures keep the existing degrade-and-continue behavior, now additionally recorded in `warnings` (message annotated with `E_PLUGIN_RUNTIME`). Directly-called `helpers` remain the caller's responsibility (documented boundary).
+- `docs/errors.md`: `E_PLUGIN_RUNTIME` / `E_CANCELLED` entries, `E_RENDER` entry covers new-tab failures and close-failure non-masking, `E_PLUGIN_INVALID` clarifies registration-vs-runtime division, new bilingual "Degradation policy" section.
+- README (EN/zh-CN): `signal` option row, `warnings` result shape, dedicated Cancellation (`#cancel`) and Degradation warnings (`#warnings`) sections with examples, image-validation and plugin-error notes, feature-status appendix rows marked 1.5.0.
+- `index.d.ts`: `GenerateOptions.signal`, `warnings: string[]` on both result interfaces, JSDoc synced.
+- `test/robustness-guard.mjs` (corrupted-image degradation at all three entry points, handler-failure degradation, empty warnings on clean runs, full-chain merge) and `test/cancel-guard.mjs` (pre-abort, mid-render abort + browser reuse, queue removal without slot hold); `error-code-guard.mjs` extended for the new codes; `npm run test:robustness` / `npm run test:cancel`.
+
+### Changed
+
+- Render robustness (pdf.js): `page.close()` failures in cleanup no longer mask the original error code; browser acquisition / new-tab failures are wrapped as `E_RENDER` (coded errors rethrow unchanged); the `disconnected` listener now checks instance identity, so a late disconnect from an old browser can no longer clear a rebuilt singleton.
+- In-browser image decode failures are counted and reported via `warnings` (previously a silent `.catch(() => {})` blind spot); printing behavior unchanged.
+- Internal `htmlToPdf` now returns `{ buffer, warnings }` (its only consumer is the package entry; Pro does not call it directly).
+
 ## [1.4.0] - 2026-11-20
 
 ### Added
