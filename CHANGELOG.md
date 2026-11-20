@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-20
+
+### Changed
+
+- Column-width fidelity: the community edition now converts Excel character-width units with the official formula using the **workbook default font's MDW** (digit "0" pixel width), via a built-in common-font heuristic table (SimSun / SimHei / KaiTi / FangSong by size, conservative Latin ratios). Previously a fixed Calibri-11 basis (MDW 7) rendered SimSun-11 templates ~13% narrow — tables sat left-aligned with an oversized right margin instead of filling the paper (e.g. A3). Templates without a readable default font keep the historical MDW 7 behavior; Calibri/Latin templates are unchanged. Pro keeps the seam override plus browser-measured per-column correction (precision differentiation unchanged).
+- README (EN/zh-CN): community-limit paragraph and comparison matrix updated (official formula + common-font heuristic vs browser-measured pixel accuracy).
+
+### Added
+
+- `test/mdw-guard.mjs` regression guard (heuristic table, official formula, styles.xml default-font fixture integration, seam-override precedence); `npm run test:mdw`.
+
 ## [1.5.0] - 2026-11-20
 
 ### Added
