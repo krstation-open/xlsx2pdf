@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-20
+
+### Added
+
+- Render concurrency is now configurable in the community edition: `maxConcurrency` accepted by both `configure()` and per-call `option` (per-call wins), default **1 unchanged**, excess requests queued as before. Positive integers only — 0 / negatives / fractions / non-numbers throw `E_OPTION_INVALID` (there is no "0 = unlimited" semantics; unbounded concurrency without admission control is exactly the OOM posture the semaphore exists to prevent).
+- One-time runtime warning when `maxConcurrency` is set above 1 without a memory-admission guard (bilingual, once per process), pointing at the memory risk and the Pro guard.
+- README (EN/zh-CN): dedicated Deployment risk note — Chrome memory grows linearly with open tabs (~400–500MB baseline, ~+100MB per tab floor), raising concurrency on small containers can OOM the whole host process, memory budgeting formula, multi-worker footprint note; option / configure tables, precedence list, comparison matrix, feature-status appendix and FAQ updated accordingly.
+- `test/concurrency-option-guard.mjs` regression guard (validation, one-time warning, peak-tab throttling, per-call override); `npm run test:concurrency`.
+
+### Changed
+
+- Community/Pro boundary: `maxConcurrency` leaves the Pro-only `resourceGuards` key set (no more `E_OPTION_PRO` for it); Pro keeps the memory-admission guard and template-size guardrail parameterization. Pro's historical `maxConcurrency` contract (0 / Infinity = unlimited) is preserved when Pro declares the key via seams.
+- `docs/errors.md`: `E_OPTION_PRO` no longer lists `maxConcurrency`; `E_OPTION_INVALID` documents the always-enforced positive-integer check.
+- `index.d.ts`: `maxConcurrency` added to `GenerateOptions` and `BrowserOptions` with defaults / precedence / risk notes.
+
 ## [1.3.0] - 2026-11-19
 
 ### Added
