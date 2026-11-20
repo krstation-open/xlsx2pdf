@@ -42,7 +42,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 - Built-in rich-media markers: `image` / `img` (local path, http(s) URL, base64 DataUrl), `barcode` (Code128), `qrcode` (QR Code).
 - Overlay parameter keys for rich-media markers: `w` / `h` / `ox` / `oy` / `zindex` / `opacity`.
-- Pure-JS image size normalization (`image-size`, @96DPI) when width/height are unset; setting one side derives the other by aspect ratio. No compression (automatic compression & DPI-aware sizing remain in Pro).
+- Pure-JS image size normalization (`image-size`, 96 DPI) when width/height are unset; setting one side derives the other by aspect ratio. No compression (automatic compression & DPI-aware sizing remain in Pro).
 - `helpers.generateCode` and `helpers.bufferToDataUrl` (engine-homologous, now 7 helpers).
 - `test/media-guard.mjs` rich-media regression guard; `npm run test:media` script.
 
