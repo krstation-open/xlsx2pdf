@@ -95,7 +95,7 @@ If all you want is to turn any xlsx into a PDF as-is, LibreOffice or a dedicated
 
 A few things we value about it: the template is just plain Excel, so business users don't have to learn a new tool; nothing native to compile and no Office dragged in on install; rendering goes through Chrome, so output is consistent across Windows / Linux / macOS; the fiddly bits that usually break — merged cells, rich text, numFmt — are handled and tested; and marker types, field resolvers and model hooks are all extensible.
 
-We should also be clear about the community edition's limits: column widths follow Excel's official formula using the workbook's default font (a built-in heuristic table covers common fonts such as SimSun, so Chinese templates no longer render narrow), while for extremely precision-sensitive layouts Pro adds browser-measured per-column correction and single-page auto-fit. It's just a Node.js library — to use it from another language, run a small Node service and call it over HTTP, or hang a Node sidecar off your app.
+We should also be clear about the community edition's limits: column widths follow Excel's official formula using the workbook's default font (a built-in heuristic table covers common fonts such as SimSun and Microsoft YaHei, so Chinese templates no longer render narrow; column widths of Chinese templates changed in 1.6.0 — if you upgrade from 1.5.x and keep pixel-level visual baselines, re-run them), while for extremely precision-sensitive layouts Pro adds browser-measured per-column correction and single-page auto-fit. It's just a Node.js library — to use it from another language, run a small Node service and call it over HTTP, or hang a Node sidecar off your app.
 
 ---
 

@@ -3,6 +3,8 @@
  *
  * 契约：
  *  - 中文等宽字体（宋体/黑体等）按字号查表/推算 MDW（宋体 11 → 8px）
+ *  - 雅黑族独立判定（1.6.1：中/英文名均命中，11pt → 9px，不误触 CJK 等宽表）
+ *  - 等线/DengXian 有意走西文分支（数字度量与 Calibri 同源，11pt → 7px）
  *  - 西文字体保守比例（Calibri/TNR 11 → 7px）；默认字体缺失维持公开常数 7
  *  - 列宽换算沿用 Excel 官方公式；seams.resolveMdw 注入时优先（Pro 覆盖边界不变）
  * 运行：node test/mdw-guard.mjs（无需浏览器）
@@ -26,9 +28,15 @@ assert.strictEqual(resolveCoreMdw({ name: '黑体', size: 11 }), 8, '黑体 11 �
 assert.strictEqual(resolveCoreMdw({ name: 'Times New Roman', size: 10 }), 7, 'TNR 10 → 7');
 assert.strictEqual(resolveCoreMdw({ name: 'Calibri', size: 11 }), 7, 'Calibri 11 → 7');
 assert.strictEqual(resolveCoreMdw({ name: '等线', size: 11 }), 7, '等线 11 走西文比例 → 7');
+assert.strictEqual(resolveCoreMdw({ name: 'DengXian', size: 11 }), 7, 'DengXian 11 与 Calibri 同源 → 7（勿归 CJK 表）');
+assert.strictEqual(resolveCoreMdw({ name: '微软雅黑', size: 11 }), 9, '微软雅黑 11 独立表 → 9（不误触 CJK 8）');
+assert.strictEqual(resolveCoreMdw({ name: 'Microsoft YaHei', size: 11 }), 9, '雅黑英文名命中 → 9（不落西文 7）');
+assert.strictEqual(resolveCoreMdw({ name: '微软雅黑', size: 9 }), 7, '雅黑 9 → 7');
+assert.strictEqual(resolveCoreMdw({ name: '微软雅黑', size: 12 }), 9, '雅黑 12 → 9');
+assert.strictEqual(resolveCoreMdw({ name: 'Microsoft YaHei', size: 14 }), 11, '雅黑 14 按 11pt→9 推算 → 11');
 assert.strictEqual(resolveCoreMdw(null), CORE_DEFAULT_MDW, '默认字体缺失维持 7');
 assert.strictEqual(resolveCoreMdw({ name: '宋体' }), CORE_DEFAULT_MDW, '无字号维持 7');
-console.log('  ✓ 常见字体启发式表（CJK 查表/推算、西文保守、缺失回退 7）');
+console.log('  ✓ 常见字体启发式表（CJK 查表/推算、雅黑族独立、等线走西文、缺失回退 7）');
 
 // ② Excel 官方公式：px = floor(((256*w + floor(128/MDW))/256)*MDW)
 assert.strictEqual(colWidthToPx(17.2, 8), 138, '宋体基准 17.2 字符 → 138px');

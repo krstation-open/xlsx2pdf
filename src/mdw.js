@@ -17,6 +17,14 @@ const CJK_MDW_TABLE = [
   { size: 12, mdw: 9 },
 ];
 
+/** 微软雅黑族（非等宽，数字比宋体宽）字号 → MDW 实测表；1.6.1 起独立判定 */
+const YAHEI_MDW_TABLE = [
+  { size: 9, mdw: 7 },
+  { size: 10, mdw: 8 },
+  { size: 11, mdw: 9 },
+  { size: 12, mdw: 9 },
+];
+
 /** 西文字体（Times New Roman 等）数字宽约为同字号宋体的 75~85% */
 const WESTERN_MDW_TABLE = [
   { size: 9, mdw: 6 },
@@ -37,7 +45,16 @@ export function resolveCoreMdw(defaultFont) {
   const size = defaultFont?.size;
   if (!size) return CORE_DEFAULT_MDW;
   const name = String(defaultFont?.name || '');
-  // 宋体/黑体等中文字体为等宽字体，MDW 可按字号推算；西文字体比例不定，取保守值
+  // 雅黑族先判：中文名含「黑」会误触 CJK 等宽表，英文名（Microsoft YaHei）则漏判落西文；
+  // 雅黑非等宽，数字比宋体宽约 1px，独立查表/按 11pt→9 推算
+  if (/雅黑|YaHei/i.test(name)) {
+    const hit = YAHEI_MDW_TABLE.find((f) => Math.abs(f.size - size) < 0.5);
+    return hit ? hit.mdw : Math.round((size / 11) * 9);
+  }
+  // 宋体/黑体等中文字体为等宽字体，MDW 可按字号推算；西文字体比例不定，取保守值。
+  // 等线/DengXian 有意走西文分支：其数字度量与 Calibri 同源（中文版 Excel 默认列
+  // 8.43 字符 = 64px，与 Calibri 11 一致，MDW=7）；canvas 实测 7.72px 是未整像素化
+  // 的分数宽，进位到 8 反而比 Excel 宽，勿归入 CJK 表
   const cjk = /宋|黑|楷|仿宋|SimSun|SimHei|KaiTi|FangSong/.test(name);
   if (cjk) {
     const hit = CJK_MDW_TABLE.find((f) => Math.abs(f.size - size) < 0.5);
