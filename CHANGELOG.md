@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-20
+
+### Fixed
+
+- MDW heuristic: the Microsoft YaHei family now has a dedicated table (both the Chinese name 微软雅黑 and the English name Microsoft YaHei). Previously the Chinese name coincidentally hit the CJK monospace table via the character “黑” (MDW 8 at 11pt) while the English name fell through to the Latin branch (MDW 7); YaHei digits are wider than SimSun's (~9px at 11pt), so YaHei-default templates rendered narrow. DengXian / 等线 intentionally stays on the Latin branch: its digit metrics are Calibri-derived (Chinese Excel's default column is 64px at MDW 7) — the fractional canvas width must not be rounded up into the CJK table. Guarded by new mdw-guard assertions.
+
+### Changed
+
+- README (EN/zh-CN): community-limit paragraph now lists YaHei coverage and adds an upgrade note — column widths of Chinese templates changed in 1.6.0, so users upgrading from 1.5.x with pixel-level visual baselines should re-run them.
+
 ## [1.6.0] - 2026-11-20
 
 ### Changed
