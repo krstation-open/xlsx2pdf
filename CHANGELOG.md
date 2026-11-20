@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-20
+
+### Fixed
+
+- Browser singleton cold-start race: the shared launch Promise is now established before the first `await` (browser-path resolution is itself async). Previously concurrent `getBrowser()` calls on a cold start could each launch a separate Chrome instance, because `launchPromise` was only assigned after path resolution. Launch failures still reset the shared Promise and rethrow the coded error. Guarded by concurrency-option-guard ⑥ (8 concurrent cold-start calls share one instance).
+- Render-slot scheduling under mixed concurrency caps: queue entries now carry their own `maxConcurrency`, and `releaseSlot` wakes the first queued request whose own cap is satisfied. Previously the queue head was woken unconditionally, so a low-cap call-level request could exceed its own limit under the shared running counter. A blocked head no longer stalls later higher-cap entries, and any cap is admitted once the counter reaches zero (no deadlock). Guarded by concurrency-option-guard ⑦.
+- Plugin registration atomicity: `use()` now validates the entire plugin before committing any state. A plugin with valid `markerTypes` / `fieldResolvers` but an invalid `transformModel` previously left half-applied global registrations behind. Guarded by error-code-guard (failed registration leaves no residue in any of the three registries).
+
+### Changed
+
+- Image cache stores the in-flight Promise instead of the resolved value: concurrent same-key calls share one download/encode pass. Latent under the current sequential engine walk; hardening for seam/plugin parallelism. Degradation semantics unchanged.
+- Registry duplicate-name warning and JSDoc now describe the actual semantics: `markerTypes` override by type name, while `fieldResolvers` / `transformModel` append in registration order (the previous wording claimed a full override that never applied to resolvers/hooks). No behavior change.
+- CI runs the full guard suite: `test:robustness` / `test:cancel` / `test:concurrency` / `test:mdw` added to the Node 18/20/22 × ubuntu/windows matrix.
+- Guards: cancel-guard adds a 10-round cyclic abort stress loop (queue/slot/tab leak and deadlock check after repeated cancellation); mdw-guard extends font-alias and multi-size coverage (NSimSun / SimHei / KaiTi / FangSong, YaHei 10pt, Latin 9/12pt).
+- README (EN/zh-CN): Pro's single-page capability is now described as **adaptive layout** (font-size / row-height adjustment from actual browser rendering, global and per-cell minimum font floors, content-aware row-height adjustment, image/barcode/QR/watermark row protection) instead of a simple auto-fit scaler. The unconditional "no clipping, no lost data" claim is removed: the comparison row, the explanation paragraph and a new FAQ entry state the explicit boundary — minimums apply, and extreme overflow is clipped with a warning. Why-xlsx2pdf and the Pro-only feature list updated accordingly; no algorithm implementation details disclosed.
+- No output change on the normal path: all fixes are internal robustness hardening; PDF/HTML results for successful generations are byte-identical to 1.6.1.
+
 ## [1.6.1] - 2026-11-20
 
 ### Fixed
