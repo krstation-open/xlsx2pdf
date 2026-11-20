@@ -95,7 +95,7 @@ If all you want is to turn any xlsx into a PDF as-is, LibreOffice or a dedicated
 
 A few things we value about it: the template is just plain Excel, so business users don't have to learn a new tool; nothing native to compile and no Office dragged in on install; rendering goes through Chrome, so output is consistent across Windows / Linux / macOS; the fiddly bits that usually break — merged cells, rich text, numFmt — are handled and tested; and marker types, field resolvers and model hooks are all extensible.
 
-We should also be clear about the community edition's limits: column widths follow Excel's official formula using the workbook's default font (a built-in heuristic table covers common fonts such as SimSun and Microsoft YaHei, so Chinese templates no longer render narrow; column widths of Chinese templates changed in 1.6.0 — if you upgrade from 1.5.x and keep pixel-level visual baselines, re-run them), while for extremely precision-sensitive layouts Pro adds browser-measured per-column correction and single-page auto-fit. It's just a Node.js library — to use it from another language, run a small Node service and call it over HTTP, or hang a Node sidecar off your app.
+We should also be clear about the community edition's limits: column widths follow Excel's official formula using the workbook's default font (a built-in heuristic table covers common fonts such as SimSun and Microsoft YaHei, so Chinese templates no longer render narrow; column widths of Chinese templates changed in 1.6.0 — if you upgrade from 1.5.x and keep pixel-level visual baselines, re-run them), while Pro adds browser-measured per-column correction for precision-sensitive layouts, and single-page adaptive layout for dynamic-length business content (font-size / row-height adjustment with minimum constraints — see [Community vs Pro](#compare)). It's just a Node.js library — to use it from another language, run a small Node service and call it over HTTP, or hang a Node sidecar off your app.
 
 ---
 
@@ -218,7 +218,7 @@ Image / barcode / QR share these keys (joined with `_`, e.g. `image_w120_h40_ox5
 | `zindex`  | `zindex2`    | z-index: 0 same layer as template, negative below, positive above, stackable; non-zero is treated as a pure overlay — does not stretch the row height, overflow still shows                            |
 | `opacity` | `opacity0.5` | opacity 0~1 (same as CSS `opacity`, 0.5 = semi-transparent); values >1 are treated as a percentage for backward compatibility (`opacity50` → 0.5), out-of-range clamped to bounds                      |
 
-> Community size normalization is pure-JS probing (image-size, no compression); automatic image compression and DPI-aware physical sizing are in Pro. `minsize` (the font-shrink floor) depends on Pro's single-page auto-fit and has no effect here; `lineheight` only affects watermark-overlay line height, and the built-in `watermark` type is Pro.
+> Community size normalization is pure-JS probing (image-size, no compression); automatic image compression and DPI-aware physical sizing are in Pro. `minsize` (the font-shrink floor) depends on Pro's single-page adaptive layout and has no effect here; `lineheight` only affects watermark-overlay line height, and the built-in `watermark` type is Pro.
 
 ### Default values
 
@@ -338,7 +338,7 @@ The community edition can take a single text / rich-media report all the way thr
 | autoInsertImage / watermark markers                                |               ❌                |                       ✅                       |
 | Detail-row index mapping (#array.field)                            |               ✅                |                       ✅                       |
 | Array multi-page batch (data array → N pages)                      |               ❌                |                       ✅                       |
-| Single-page auto-fit (overflow converges to one page, no clipping) |               ❌                |                       ✅                       |
+| Single-page adaptive layout (font-size & row-height adjustment, minimum constraints, overflow warning) |               ❌                |                       ✅                       |
 | Column-width precision                                             |  official formula + common-font heuristic (1.6.0)   | browser-measured pixel accuracy + font-missing guard |
 | Custom paper (receipt rolls) direct read                           |               ❌                |                       ✅                       |
 | Landscape WPS / Clodop (a browser print control) print adaptation  |               ❌                |                       ✅                       |
@@ -346,7 +346,7 @@ The community edition can take a single text / rich-media report all the way thr
 | Custom extensions (3 points + custom syntax)                       |               ✅                |                       ✅                       |
 | License                                                            | Apache-2.0, free commercial use |                commercial EULA                 |
 
-The "single-page auto-fit" row deserves a plain explanation: in the community edition, content that overflows goes through native Chrome pagination and may clip or span pages. Pro's single-page auto-fit, when data is too long and would otherwise overflow, automatically adjusts font size and row height to fit everything onto one page — no clipping, no lost data. This matters a lot for "must be one page" cases like shipping labels and fixed invoices.
+The "single-page adaptive layout" row deserves a plain explanation. With dynamic business data, text often outgrows the space the template reserved: content overflows, row heights fall short, and the page no longer prints complete. In the community edition, overflow goes through native Chrome pagination and may clip or span pages. Pro's adaptive layout works from the browser's actual rendering: it adjusts font sizes and row heights to fit the content onto one page while keeping the template's visual structure. Font-size adjustment respects a global floor and a per-cell floor (`minsize`); row heights follow the space the content actually needs; rows carrying images, barcodes, QR codes or watermarks are protected from compression. The goal is not pixel-level replication of Excel's font sizes and row heights, but a complete, readable, print-ready single page. The boundary is explicit: font sizes and row heights have minimums, and when extreme content still cannot fit, the remaining overflow is clipped and a warning is emitted — adaptive layout fits one page as far as the constraints allow, it does not guarantee it unconditionally. This matters for "must be one page" cases like shipping labels, fixed invoices and inspection reports.
 
 **Pro consulting / free POC**: send 3 of your real templates; within 48 hours we return Pro output and a benchmark comparison report. 📧 business@krstation.com
 
@@ -402,7 +402,7 @@ Every feature in one table, with a checkbox for implementation status: ☑ imple
 
 ### Pro-only (not in the community edition)
 
-Automatic image compression + DPI-aware sizing, autoInsertImage, watermark markers, array multi-page batch, single-page auto-fit convergence, pixel-accurate column width + font-missing guard, custom paper direct read, landscape print-control adaptation, precise scaling, parameterized memory guard / template-size guardrails. Effect-level comparison in [Community vs Pro](#compare).
+Automatic image compression + DPI-aware sizing, autoInsertImage, watermark markers, array multi-page batch, single-page adaptive layout (font-size / row-height adjustment, minimum constraints, overflow warning), pixel-accurate column width + font-missing guard, custom paper direct read, landscape print-control adaptation, precise scaling, parameterized memory guard / template-size guardrails. Effect-level comparison in [Community vs Pro](#compare).
 
 ---
 
@@ -749,6 +749,9 @@ if (warnings.length > 0) console.warn('This generation degraded:', warnings);
 
 **Q: Long text clips or spans pages?**
 Community uses native Chrome pagination; long text may clip or span. Reserve enough space in the template, or control field length on the business side.
+
+**Q: Does Pro's adaptive layout guarantee one page without clipping?**
+No — it fits as much as possible within explicit minimums. Font sizes and row heights have floors, rows carrying images / watermarks are protected from compression, and when extreme content still cannot fit, the remaining overflow is clipped and a warning is emitted. Design for the common case and handle the warning for the extreme one.
 
 **Q: Dynamic detail rows?**
 Built-in #array.field index mapping: repeat the marker per row in the template and the engine takes successive array indices; row count is fixed by the template (reserve enough repeated rows). It is not a dynamic loop that expands one row into N.
