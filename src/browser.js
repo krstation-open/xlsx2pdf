@@ -69,7 +69,7 @@ const config = {
   markerRegex: undefined,
   /** 标记内部「字段 / 类型_参数」分隔符（全局默认；调用级优先） */
   markerSeparator: undefined,
-  /** 同时打开的渲染标签页上限（超限排队；社区版串行 1，商业版默认 4） */
+  /** 同时打开的渲染标签页上限（超限排队；默认 1，只接受正整数；商业版经接缝声明后另兼容 0/Infinity 不限的旧语义） */
   maxConcurrency: 1,
   /** 模板单元格数上限（实际行×列；超限报错拒绝生成，默认 20000，传 0/负数关闭） */
   maxCells: 20000,
@@ -84,10 +84,40 @@ const config = {
 };
 
 /**
+ * 校验 maxConcurrency 取值（configure 与调用级 option 共用）。
+ * 社区版只接受正整数：0/负数/小数/非数值抛 E_OPTION_INVALID——
+ * 「传 0 关闭」的护栏语义不适用于并发，无上限即无准入裸奔。
+ * 商业版经 seams.extraConfigKeys 声明该键后兼容其历史契约（0/负数/Infinity = 不限）。
+ * @param {*} value
+ * @param {string} where - 报错定位（configure / option）
+ */
+export function validateMaxConcurrency(value, where) {
+  const seams = getSeams();
+  if (seams.extraConfigKeys.includes('maxConcurrency')) return; // Pro 旧语义（含 0/Infinity 不限）由商业版自行约束
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw xlsxError('E_OPTION_INVALID',
+      `[xlsx2pdf] ${where}.maxConcurrency 只接受正整数（同时渲染的标签页上限，默认 1），收到：${JSON.stringify(value)}`,
+      `${where}.maxConcurrency accepts a positive integer only (max simultaneously rendering tabs, default 1), received: ${JSON.stringify(value)}.`);
+  }
+}
+
+/** 并发 >1 且无内存准入守卫时的一次性运行期告警（进程内只提醒一次） */
+let concurrencyWarned = false;
+export function warnConcurrencyRisk(value) {
+  if (concurrencyWarned || !(value > 1) || getSeams().memoryAdmit) return;
+  concurrencyWarned = true;
+  console.warn(
+    `[xlsx2pdf] maxConcurrency 已设为 ${value}：社区版无内存准入守卫，Chrome 内存随标签页数线性增长，` +
+    '请确认宿主服务内存余量充足（小内存容器建议维持默认 1；内存守卫为商业版 Pro 能力）。' +
+    ` maxConcurrency is set to ${value}: the community edition has no memory admission guard and Chrome memory grows linearly with open tabs;` +
+    ' make sure the host service has enough memory headroom (keep the default 1 on small containers; the memory guard is a Pro capability).');
+}
+
+/**
  * 配置浏览器行为（模块级单例；closeBrowser 后下次启动按新配置重建）
  *
- * 社区版接受 browserPath / headless / launchArgs / markerRegex / markerSeparator 五键；
- * 其余键（maxConcurrency/maxCells/maxTemplateSize/memoryGuard/fontGuard/pageRotate）
+ * 社区版接受 browserPath / headless / launchArgs / markerRegex / markerSeparator / maxConcurrency 六键；
+ * 其余键（maxCells/maxTemplateSize/memoryGuard/fontGuard/pageRotate）
  * 须由商业版经接缝声明后才接受，未声明时静默忽略。
  *
  * @param {Object} [option]
@@ -96,6 +126,7 @@ const config = {
  * @param {string[]} [option.launchArgs] - 追加启动参数
  * @param {RegExp} [option.markerRegex] - 自定义标记语法匹配正则（全局默认，调用级优先；传 null 恢复内置 ${...}）
  * @param {string} [option.markerSeparator] - 标记内部分隔符（全局默认，默认 "|"，调用级优先；传 null 恢复默认）
+ * @param {number} [option.maxConcurrency] - 同时渲染的标签页上限（正整数，默认 1，超限排队；调大前请确认内存余量）
  * @returns 当前生效配置（只读副本）
  */
 export function configure(option = {}) {
@@ -105,11 +136,16 @@ export function configure(option = {}) {
   // 标记语法为社区版扩展能力，恒接受（契约校验在引擎使用处 validateMarkerRegex）
   if (option.markerRegex !== undefined) config.markerRegex = option.markerRegex;
   if (option.markerSeparator !== undefined) config.markerSeparator = option.markerSeparator;
+  // 渲染并发为社区版开放键（1.4.0 起）：默认 1 不变，只接受正整数，调大风险见 README 部署节
+  if (option.maxConcurrency !== undefined) {
+    validateMaxConcurrency(option.maxConcurrency, 'configure');
+    config.maxConcurrency = option.maxConcurrency;
+    warnConcurrencyRisk(option.maxConcurrency);
+  }
 
   // 商业版声明的额外参数化键（未声明的键静默忽略，保持社区版行为）
   const seams = getSeams();
   const accepted = new Set(seams.extraConfigKeys);
-  if (accepted.has('maxConcurrency') && option.maxConcurrency !== undefined) config.maxConcurrency = option.maxConcurrency;
   if (accepted.has('maxCells') && option.maxCells !== undefined) config.maxCells = option.maxCells;
   if (accepted.has('maxTemplateSize') && option.maxTemplateSize !== undefined) config.maxTemplateSize = option.maxTemplateSize;
   if (accepted.has('memoryGuard') && option.memoryGuard !== undefined) {

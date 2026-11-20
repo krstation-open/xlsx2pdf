@@ -28,7 +28,7 @@ try {
 | [`E_DATA_TYPE`](#e_data_type) | `data` 不是对象 | 传普通对象（数组批量属 Pro） |
 | [`E_OPTION_PRO`](#e_option_pro) | 传入 Pro 专属 option / 数组 data / 对象型 pageSize | 移除该参数或升级 Pro |
 | [`E_OPTION_UNKNOWN`](#e_option_unknown) | 未知 option 键（含拼写错误） | 对照 README option 表 |
-| [`E_OPTION_INVALID`](#e_option_invalid) | option / configure 值类型非法 | 按提示传合法值 |
+| [`E_OPTION_INVALID`](#e_option_invalid) | option / configure 值类型非法（含 `maxConcurrency` 非正整数） | 按提示传合法值 |
 | [`E_MARKER_REGEX`](#e_marker_regex) | 自定义标记正则不合契约 | g 标志 + 捕获组 1 |
 | [`E_MARKER_SEPARATOR`](#e_marker_separator) | `markerSeparator` 为空或非字符串 | 传非空字符串 |
 | [`E_MARKER_PRO`](#e_marker_pro) | 模板使用未注册的 Pro 标记类型（watermark） | 移除标记或升级 Pro |
@@ -82,8 +82,8 @@ Pass a plain object; nested fields are addressed with dot paths.
 <a id="e_option_pro"></a>
 ### E_OPTION_PRO
 
-传入了商业版 Pro 专属参数：数组 `data`（批量多页）、对象型 `option.pageSize`（自定义纸张）、或 `fitToPage` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` / `emptyRowPlaceholders` 等护栏/精调键。社区版显式报错引导，不静默降级。
-A Pro-only parameter was passed: array `data` (batch pages), object `option.pageSize` (custom paper), or guardrail/fine-tuning keys such as `fitToPage` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` / `emptyRowPlaceholders`. The community edition fails fast with guidance instead of silently degrading.
+传入了商业版 Pro 专属参数：数组 `data`（批量多页）、对象型 `option.pageSize`（自定义纸张）、或 `fitToPage` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders` 等护栏/精调键。社区版显式报错引导，不静默降级。（`maxConcurrency` 自 1.4.0 已下放社区版，不再属 Pro 专属，见 `E_OPTION_INVALID`。）
+A Pro-only parameter was passed: array `data` (batch pages), object `option.pageSize` (custom paper), or guardrail/fine-tuning keys such as `fitToPage` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders`. The community edition fails fast with guidance instead of silently degrading. (`maxConcurrency` is available in the community edition since 1.4.0 and is no longer Pro-only; see `E_OPTION_INVALID`.)
 
 **修复 / Fix**：移除该参数用社区版默认行为，或联系商业版咨询（报错文案内含邮箱）。
 Remove the parameter to use community defaults, or contact Pro sales (email included in the message).
@@ -100,8 +100,8 @@ Check the supported-key list in the message and the option table in the README.
 <a id="e_option_invalid"></a>
 ### E_OPTION_INVALID
 
-option / configure 的值类型非法（如 `pageRotate` 非 boolean、`fontGuard` 不在策略列表）。这类校验仅在 Pro 经接缝声明相应键后生效；纯社区版下这些键会更早被 `E_OPTION_PRO`（option）拦截或静默忽略（configure）。
-An option/configure value has an invalid type (e.g. non-boolean `pageRotate`, `fontGuard` outside the strategy list). These checks only apply after Pro declares the keys via seams; in the pure community edition such keys are intercepted earlier by `E_OPTION_PRO` (option) or silently ignored (configure).
+option / configure 的值类型非法。社区版恒生效的校验：`maxConcurrency` 只接受正整数（0/负数/小数/非数值均拒绝，无「传 0 不限」语义）；其余如 `pageRotate` 非 boolean、`fontGuard` 不在策略列表等校验仅在 Pro 经接缝声明相应键后生效；纯社区版下这些键会更早被 `E_OPTION_PRO`（option）拦截或静默忽略（configure）。
+An option/configure value has an invalid type. Always enforced in the community edition: `maxConcurrency` accepts positive integers only (0 / negatives / fractions / non-numbers are rejected; there is no "0 = unlimited" semantics). Other checks (e.g. non-boolean `pageRotate`, `fontGuard` outside the strategy list) only apply after Pro declares the keys via seams; in the pure community edition such keys are intercepted earlier by `E_OPTION_PRO` (option) or silently ignored (configure).
 
 **修复 / Fix**：按报错提示的合法取值传参。
 Pass one of the accepted values listed in the message.

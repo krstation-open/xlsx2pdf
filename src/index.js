@@ -23,7 +23,7 @@ import { processTemplate } from './engine.js';
 import { renderHtml, renderTableFragment } from './render.js';
 import { htmlToPdf, closeBrowser } from './pdf.js';
 import { resolvePageSetup, isMeaningfulPageSize } from './pagesetup.js';
-import { configure, ensureBrowser, getConfig, pkgRoot } from './browser.js';
+import { configure, ensureBrowser, getConfig, pkgRoot, validateMaxConcurrency, warnConcurrencyRisk } from './browser.js';
 import { getSeams, hasCapability } from './seams.js';
 import { use } from './registry.js';
 import { flattenObject, getFileBuffer, parseMarkerOption, validateMarkerRegex } from './utils.js';
@@ -48,7 +48,6 @@ const PRO_OPTION_KEYS = {
   fontGuard: ['fontGuard', '默认字体缺失守卫'],
   maxCells: ['resourceGuards', '单元格数上限参数化'],
   maxTemplateSize: ['resourceGuards', '模板体积上限参数化'],
-  maxConcurrency: ['resourceGuards', '渲染并发参数化'],
   memoryGuard: ['resourceGuards', '内存准入守卫'],
   emptyRowPlaceholders: ['emptyRowPlaceholders', '空行占位字符（自适应配套）'],
 };
@@ -95,9 +94,13 @@ function validateParams({ template, data, option = {} }) {
     }
   }
 
+  // 调用级并发上限（1.4.0 起社区版开放）：只接受正整数，两个生成 API 同一校验；
+  // 生效链路在 excel2pdf（excel2html 不启动浏览器，仅校验不消费）
+  if (option.maxConcurrency !== undefined) validateMaxConcurrency(option.maxConcurrency, 'option');
+
   // 未知 option 键同样拒绝：拼错入参不应被静默忽略
-  // （plugins/markerRegex/markerSeparator 为社区版扩展能力，恒放行）
-  const ALLOWED_KEYS = ['pageSize', 'orientation', 'margin', 'defaults', 'plugins', 'markerRegex', 'markerSeparator'];
+  // （plugins/markerRegex/markerSeparator/maxConcurrency 为社区版能力，恒放行）
+  const ALLOWED_KEYS = ['pageSize', 'orientation', 'margin', 'defaults', 'plugins', 'markerRegex', 'markerSeparator', 'maxConcurrency'];
   for (const [key, [cap]] of Object.entries(PRO_OPTION_KEYS)) {
     if (hasCapability(cap)) ALLOWED_KEYS.push(key);
   }
@@ -250,6 +253,9 @@ export async function excel2pdf({ template, data, option = {} }) {
       `option.pageRotate accepts boolean only, received: ${JSON.stringify(option.pageRotate)}.`);
   }
 
+  // 调用级并发调大时的运行期风险告警（校验已在 validateParams 统一做过）
+  if (option.maxConcurrency !== undefined) warnConcurrencyRisk(option.maxConcurrency);
+
   const { html, pages } = await buildHtml({ template, data, option });
 
   // fontGuard：调用级 > 全局 configure > 默认 'warn'；非法值抛错（与 configure 一致）
@@ -267,6 +273,7 @@ export async function excel2pdf({ template, data, option = {} }) {
     orientation: firstPage.orientation,
     margin: firstPage.margin,
     fontGuard,
+    maxConcurrency: option.maxConcurrency,
   });
 
   // 横向标记补写（商业版接缝）：Chromium 只用「交换 MediaBox 宽高」表达横向且绝不写 /Rotate，

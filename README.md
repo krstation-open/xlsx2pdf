@@ -340,7 +340,7 @@ The community edition can take a single text / rich-media report all the way thr
 | Column-width precision                                             |  public-formula approximation   | pixel-accurate conversion + font-missing guard |
 | Custom paper (receipt rolls) direct read                           |               ❌                |                       ✅                       |
 | Landscape WPS / Clodop (a browser print control) print adaptation  |               ❌                |                       ✅                       |
-| Concurrency / memory-admission guard                               |    fixed single concurrency     |      parameterized production guardrails       |
+| Concurrency / memory-admission guard                               | concurrency configurable (default 1, no memory guard) | parameterized guardrails + memory admission |
 | Custom extensions (3 points + custom syntax)                       |               ✅                |                       ✅                       |
 | License                                                            | Apache-2.0, free commercial use |                commercial EULA                 |
 
@@ -378,6 +378,7 @@ Every feature in one table, with a checkbox for implementation status: ☑ imple
 | CLI (`xlsx2pdf convert`)                                                                              |   ☑    | 1.3.0 |                                                                               |
 | Stable error codes + bilingual messages + error reference doc                                         |   ☑    | 1.3.0 |                                                                               |
 | GitHub Actions CI + status badges                                                                     |   ☑    | 1.3.0 |                                                                               |
+| Render concurrency parameterization (`maxConcurrency`)                                                |   ☑    | 1.4.0 | default 1, positive integers only; no memory guard — see Deployment risk note |
 | Multi-worksheet selection (`option.sheet`)                                                            |   ☐    |       |                                                                               |
 | Hidden row / column filtering                                                                         |   ☐    |       |                                                                               |
 | Reading images already embedded in the template                                                       |   ☐    |       |                                                                               |
@@ -397,7 +398,7 @@ Every feature in one table, with a checkbox for implementation status: ☑ imple
 
 ### Pro-only (not in the community edition)
 
-Automatic image compression + DPI-aware sizing, autoInsertImage, watermark markers, array multi-page batch, single-page auto-fit convergence, pixel-accurate column width + font-missing guard, custom paper direct read, landscape print-control adaptation, precise scaling, parameterized concurrency / memory guardrails. Effect-level comparison in [Community vs Pro](#compare).
+Automatic image compression + DPI-aware sizing, autoInsertImage, watermark markers, array multi-page batch, single-page auto-fit convergence, pixel-accurate column width + font-missing guard, custom paper direct read, landscape print-control adaptation, precise scaling, parameterized memory guard / template-size guardrails. Effect-level comparison in [Community vs Pro](#compare).
 
 ---
 
@@ -462,9 +463,11 @@ Browser resolution precedence: `configure({ browserPath })` > the `XLSX2PDF_BROW
 | :----------------- | :------ | :---------------------------------------------------------------------------------- |
 | Template size      | 5MB     | reject beyond cap                                                                   |
 | Cell count         | 20000   | actual rows×cols; reject beyond cap (streaming pre-check rejects early before load) |
-| Render concurrency | 1       | max simultaneously open tabs; excess queued                                         |
+| Render concurrency | 1 (configurable) | max simultaneously open tabs; excess queued; positive integers only — risk note below |
 
-These three are fixed defaults in the community edition and are not parameterized; guardrail parameterization such as `maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` is a Pro capability; passing them via option in the community edition raises an explicit guidance error (configure silently ignores them instead — see [API](#api)). Remote resources (template URL / image URL) download with a 30-second timeout and a 20MB size cap; failures throw a coded error (`E_DOWNLOAD_*`) with a bilingual message and the URL attached — see [docs/errors.md](./docs/errors.md).
+Template size and cell count are fixed defaults in the community edition and are not parameterized; guardrail parameterization such as `maxCells` / `maxTemplateSize` / `memoryGuard` is a Pro capability; passing them via option in the community edition raises an explicit guidance error (configure silently ignores them instead — see [API](#api)). Render concurrency is parameterized since 1.4.0 (`maxConcurrency`, via configure or per-call option; the default of 1 is unchanged). Remote resources (template URL / image URL) download with a 30-second timeout and a 20MB size cap; failures throw a coded error (`E_DOWNLOAD_*`) with a bilingual message and the URL attached — see [docs/errors.md](./docs/errors.md).
+
+> **⚠️ Read before raising render concurrency**: the community edition has **no memory-admission guard**, and Chrome memory grows **linearly** with the number of simultaneously open tabs (measured: ~400–500MB baseline, ~+100MB per tab as a floor, more for large image-heavy templates). Raising `maxConcurrency` on a small container (e.g. 2C4G) can push the whole host service into OOM — not just the library crashing, but every other business in the same process killed with it. Before raising it, budget memory as "baseline + concurrency × per-page peak + the host's own headroom"; setting it above 1 triggers a one-time runtime warning. With multiple worker processes (e.g. egg cluster) each worker holds its own browser singleton, so machine-wide memory ≈ workers × per-worker footprint. The memory-admission guard that lets you "raise concurrency without blowing up" (probes free memory before rendering, admits only when estimate + safety reserve fits) is a Pro capability.
 
 ---
 
@@ -651,8 +654,9 @@ Engine-homologous utilities are exposed under the `helpers` namespace (`import {
 | `plugins`         | `Plugin[]`                                        | `[]`                                            | per-call extensions, this generation only, same-name overrides global `use()`                                                                       |
 | `markerRegex`     | `RegExp` (g flag + capture group 1)               | built-in `${...}`                               | custom marker matching, takes precedence over configure global                                                                                      |
 | `markerSeparator` | `string`                                          | `'\|'`                                          | the internal "field / type_params" separator, takes precedence over configure global                                                                |
+| `maxConcurrency`  | `number` (positive integer)                       | `1`                                             | max simultaneously rendering tabs, excess queued; over configure global; raising risk in [Deployment](#deploy)                                      |
 
-Page-setup params (pageSize / orientation / margin) precedence: **per-call option > template pageSetup > Excel built-in defaults**. Pro-only option keys (`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` / `emptyRowPlaceholders`) raise an explicit guidance error when passed in the community edition; unknown option keys are likewise rejected (a typo is never silently ignored). Note: configure silently ignores the same guardrail keys rather than throwing — see configure(option) below for why.
+Page-setup params (pageSize / orientation / margin) precedence: **per-call option > template pageSetup > Excel built-in defaults**. Pro-only option keys (`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders`) raise an explicit guidance error when passed in the community edition; unknown option keys are likewise rejected (a typo is never silently ignored). Note: configure silently ignores the same guardrail keys rather than throwing — see configure(option) below for why.
 
 `defaults` is a global fallback: when `data` lacks a field and that marker has no default, the same-named value in `defaults` is used. Resolution order is **data → marker-level default → `option.defaults`**:
 
@@ -678,6 +682,7 @@ configure({
   launchArgs: ['--proxy-server=...'], // extra launch args
   markerRegex: /\{\{([^}]+)\}\}/g, // global marker syntax (null restores built-in ${...})
   markerSeparator: '::', // global internal separator (null restores vertical bar)
+  maxConcurrency: 2, // max simultaneously rendering tabs (positive integer, default 1; read the Deployment risk note first)
 });
 ```
 
@@ -688,8 +693,9 @@ configure({
 | `launchArgs`      | `string[]`         | `[]`              | extra browser launch args                                            |
 | `markerRegex`     | `RegExp \| null`   | built-in `${...}` | global marker syntax, per-call option wins; `null` restores built-in |
 | `markerSeparator` | `string \| null`   | `'\|'`            | global internal separator, per-call wins; `null` restores default    |
+| `maxConcurrency`  | `number` (positive integer) | `1`       | max simultaneously rendering tabs, excess queued; per-call option wins; one-time risk warning when set above 1 |
 
-The community edition accepts only these five keys; guardrail keys such as `maxConcurrency` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `fontGuard` / `pageRotate` are accepted only after Pro declares them via seams — in the community edition they are silently ignored and the fixed safety caps apply (see [Deployment](#deploy)); any other unknown keys are silently ignored too.
+The community edition accepts these six keys; the remaining guardrail keys (`maxCells` / `maxTemplateSize` / `memoryGuard` / `fontGuard` / `pageRotate`) are accepted only after Pro declares them via seams — in the community edition they are silently ignored and the fixed safety caps apply (see [Deployment](#deploy)); any other unknown keys are silently ignored too. `maxConcurrency` is the one exception: open to the community edition and strictly validated (0 / negatives / fractions / non-numbers throw `E_OPTION_INVALID`; there is no "0 = unlimited" semantics).
 
 This differs from the option section on purpose: option is per-generation input, where Pro keys and mistyped unknown keys both raise an explicit error (fail fast + conversion guidance); configure is process-level configuration, where the community edition tolerantly ignores undeclared keys and falls back to the fixed caps. If you want a Pro guardrail key to be intercepted with an error, put it in option rather than configure.
 
@@ -697,6 +703,7 @@ This differs from the option section on purpose: option is per-generation input,
 
 - Page setup (pageSize / orientation / margin): per-call option > template pageSetup > Excel built-in defaults;
 - Marker syntax (markerRegex / markerSeparator): per-call option > configure global > built-in defaults;
+- Render concurrency (maxConcurrency): per-call option > configure global > 1;
 - Plugins: per-call `option.plugins` merges with global `use()`, same-name resolved in favor of per-call (fieldResolvers run per-call first, transformModel runs per-call last).
 
 ---
@@ -718,7 +725,7 @@ Built-in Code128 (`barcode`) and QR Code (`qrcode`), generated as PNG by bwip-js
 No. Bundled headless Chrome rendering, no Office engine dependency.
 
 **Q: Concurrent calls?**
-Fixed single concurrency, excess queued. For high concurrency, manage your own queue.
+Yes. Single concurrency by default, excess queued; since 1.4.0 you can raise it via `maxConcurrency` (positive integer), but the community edition has no memory guard — read the [Deployment risk note](#deploy) first.
 
 **Q: Missing fonts?**
 Chrome font fallback handles rendering; glyphs may differ from Excel when a font is missing. Install the fonts your template uses in the container (see [Deployment](#deploy)).

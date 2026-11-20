@@ -103,9 +103,9 @@ export async function closeBrowser() {
 let runningPages = 0;
 const waitQueue = [];
 
-/** 获取一个渲染槽位（超限时排队等待） */
-function acquireSlot() {
-  const max = getConfig().maxConcurrency;
+/** 获取一个渲染槽位（超限时排队等待）；maxOverride 为调用级上限，优先于 configure 全局 */
+function acquireSlot(maxOverride) {
+  const max = maxOverride ?? getConfig().maxConcurrency;
   if (!max || max <= 0 || runningPages < max) {
     runningPages++;
     return Promise.resolve();
@@ -132,6 +132,7 @@ function releaseSlot() {
  * @property {string} [orientation='portrait']
  * @property {Object} [margin] - mm
  * @property {'warn'|'throw'|'silent'} [fontGuard] - 模板默认字体缺失时的处理（默认 'warn'；检测由商业版接缝提供）
+ * @property {number} [maxConcurrency] - 调用级并发上限（正整数，优先于 configure 全局；缺省用全局值）
  */
 
 /**
@@ -157,7 +158,7 @@ export async function htmlToPdf(html, option = {}) {
   // 不占用并发槽位；与 maxConcurrency 信号量取“与”合流（守卫实现由商业版接缝注入，缺省直接放行）
   const seams = getSeams();
   const releaseMemory = seams.memoryAdmit ? await seams.memoryAdmit(getConfig().memoryGuard) : () => {};
-  await acquireSlot();
+  await acquireSlot(option.maxConcurrency);
   try {
     const br = await getBrowser();
     const pg = await br.newPage();

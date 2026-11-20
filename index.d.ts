@@ -95,6 +95,12 @@ export interface GenerateOptions {
    * 优先级：调用级 > configure({ markerSeparator }) 全局默认 > '|'。
    */
   markerSeparator?: string;
+  /**
+   * 同时渲染的标签页上限（超限排队），只接受正整数（0/负数/小数抛 E_OPTION_INVALID），默认 1。
+   * 优先级：调用级 > configure({ maxConcurrency }) 全局默认 > 1。
+   * 风险：社区版无内存准入守卫，Chrome 内存随标签页数线性增长，调大前请确认宿主内存余量（见 README 部署节）。
+   */
+  maxConcurrency?: number;
 }
 
 /** 生成入参 */
@@ -137,6 +143,12 @@ export interface BrowserOptions {
   markerRegex?: RegExp | null;
   /** 标记内部分隔符（全局默认，默认 '|'；传 null 恢复默认） */
   markerSeparator?: string | null;
+  /**
+   * 同时渲染的标签页上限（全局默认，默认 1，超限排队），只接受正整数（违约抛 E_OPTION_INVALID）。
+   * 风险：社区版无内存准入守卫，Chrome 内存随标签页数线性增长；设为 >1 时库会打一次性告警，
+   * 小内存容器（如 2C4G）建议维持默认 1，详见 README 部署节。
+   */
+  maxConcurrency?: number;
 }
 
 /** 配置浏览器行为（模块级单例；closeBrowser 后下次启动按新配置重建），返回当前生效配置 */

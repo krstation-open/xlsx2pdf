@@ -340,7 +340,7 @@ data: { items: [{ name: '甲' }, { name: '乙' }] }
 | 列宽精度                                      |     公开公式近似     | 像素级精确换算 + 缺字体守卫 |
 | 自定义纸张（小票卷纸）直读                    |          ❌          |             ✅              |
 | 横向页 WPS / Clodop（浏览器打印控件）打印适配 |          ❌          |             ✅              |
-| 并发渲染 / 内存准入守卫                       |      固定单并发      |       参数化生产护栏        |
+| 并发渲染 / 内存准入守卫                       | 并发可配（默认 1，无内存守卫） | 参数化护栏 + 内存准入守卫 |
 | 自定义扩展（三扩展点 + 自定义语法）           |          ✅          |             ✅              |
 | 许可                                          | Apache-2.0，免费商用 |          商业 EULA          |
 
@@ -378,6 +378,7 @@ data: { items: [{ name: '甲' }, { name: '乙' }] }
 | CLI（`xlsx2pdf convert`）                                   |    ☑     | 1.3.0    |                                                                     |
 | 稳定错误码 + 双语报错 + 错误对照文档                        |    ☑     | 1.3.0    |                                                                     |
 | GitHub Actions CI + 状态徽章                                |    ☑     | 1.3.0    |                                                                     |
+| 渲染并发参数化（`maxConcurrency`）                          |    ☑     | 1.4.0    | 默认 1，只接受正整数；无内存守卫，调大风险见部署节                |
 | 多工作表选择（`option.sheet`）                              |    ☐     |          |                                                                     |
 | 隐藏行 / 列过滤                                             |    ☐     |          |                                                                     |
 | 读取模板已嵌入的图片                                        |    ☐     |          |                                                                     |
@@ -397,7 +398,7 @@ data: { items: [{ name: '甲' }, { name: '乙' }] }
 
 ### Pro 专属（社区版不提供）
 
-图片自动压缩 + DPI 感知尺寸、autoInsertImage、watermark 标记、数组多页批量、单页自适应收敛、像素级列宽 + 缺字体守卫、自定义纸张直读、横向页国产打印控件适配、精确缩放、并发与内存护栏参数化。效果对照见[社区版 vs Pro 版](#compare)。
+图片自动压缩 + DPI 感知尺寸、autoInsertImage、watermark 标记、数组多页批量、单页自适应收敛、像素级列宽 + 缺字体守卫、自定义纸张直读、横向页国产打印控件适配、精确缩放、内存守卫与模板规模护栏参数化。效果对照见[社区版 vs Pro 版](#compare)。
 
 ---
 
@@ -462,9 +463,11 @@ configure({ browserPath: '/usr/bin/chromium' });
 | :------- | :---- | :------------------------------------------------ |
 | 模板体积 | 5MB   | 超限报错拒绝生成                                  |
 | 单元格数 | 20000 | 实际行×列，超限报错（加载前另有流式预检提前拦截） |
-| 渲染并发 | 1     | 同时打开的标签页上限，超限排队                    |
+| 渲染并发 | 1（可配） | 同时打开的标签页上限，超限排队；只接受正整数，风险见下方提醒 |
 
-这三项在社区版是固定默认值，不开放参数化；`maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` 等护栏参数化属 Pro 能力，社区版经 option 传入会显式报错引导（configure 则静默忽略，见 [API](#api)）。远程资源（模板 URL / 图片 URL）下载带 30 秒超时与 20MB 体积上限，失败统一抛带稳定错误码（`E_DOWNLOAD_*`）的双语报错并附 URL，见 [docs/errors.md](./docs/errors.md)。
+模板体积与单元格数在社区版是固定默认值，不开放参数化；`maxCells` / `maxTemplateSize` / `memoryGuard` 等护栏参数化属 Pro 能力，社区版经 option 传入会显式报错引导（configure 则静默忽略，见 [API](#api)）。渲染并发自 1.4.0 起开放参数化（`maxConcurrency`，configure 与调用级 option 均可，默认 1 不变）。远程资源（模板 URL / 图片 URL）下载带 30 秒超时与 20MB 体积上限，失败统一抛带稳定错误码（`E_DOWNLOAD_*`）的双语报错并附 URL，见 [docs/errors.md](./docs/errors.md)。
+
+> **⚠️ 调大渲染并发前必读**：社区版**没有内存准入守卫**，Chrome 内存随同时打开的标签页数**线性增长**（实测：基线约 400~500MB，每个标签页约 +100MB 起步，带图大模板更高）。在小内存容器（如 2C4G）调大 `maxConcurrency` 可能把宿主服务整体拖入 OOM——这不是库自身崩溃，而是同进程其他业务一起被杀。调大前请务必按「基线 + 并发数 × 单页峰值 + 宿主自身余量」核算内存；设为 >1 时库会打一次性运行期告警。多 worker 进程（如 egg cluster）每个 worker 各自持有一个浏览器单例，整机内存 ≈ worker 数 × 单 worker 占用。需要「调大并发但不炸」的内存准入守卫（渲染前探测可用内存，满足估算 + 安全余量才放行）属 Pro 能力。
 
 ---
 
@@ -651,8 +654,9 @@ use({
 | `plugins`         | `Plugin[]`                                        | `[]`                          | 调用级扩展，仅本次生成生效，同名覆盖全局 `use()`                                                 |
 | `markerRegex`     | `RegExp`（g 标志 + 捕获组 1）                     | 内置 `${...}`                 | 自定义标记匹配规则，优先于 configure 全局                                                        |
 | `markerSeparator` | `string`                                          | `'\|'`                        | 标记内「字段 / 类型\_参数」分隔符，优先于 configure 全局                                         |
+| `maxConcurrency`  | `number`（正整数）                                | `1`                           | 同时渲染的标签页上限，超限排队；优先于 configure 全局；调大风险见[部署](#deploy) |
 
-页面设置类（pageSize / orientation / margin）优先级：**调用级 option > 模板 pageSetup > Excel 内建默认**。Pro 专属 option 键（`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `maxConcurrency` / `memoryGuard` / `emptyRowPlaceholders`）社区版传入即显式报错引导；未知 option 键同样拒绝（拼错入参不被静默忽略）。注意：configure 对同类护栏键是静默忽略而非报错，差异原因见下文 configure(option)。
+页面设置类（pageSize / orientation / margin）优先级：**调用级 option > 模板 pageSetup > Excel 内建默认**。Pro 专属 option 键（`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders`）社区版传入即显式报错引导；未知 option 键同样拒绝（拼错入参不被静默忽略）。注意：configure 对同类护栏键是静默忽略而非报错，差异原因见下文 configure(option)。
 
 `defaults` 是全局兜底：当 `data` 缺某字段、且该标记没写默认值时，用 `defaults` 里的同名值。取值顺序为 **data → 标记内默认值 → `option.defaults`**：
 
@@ -678,6 +682,7 @@ configure({
   launchArgs: ['--proxy-server=...'], // 追加启动参数
   markerRegex: /\{\{([^}]+)\}\}/g, // 全局默认标记语法（传 null 恢复内置 ${...}）
   markerSeparator: '::', // 全局默认标记内部分隔符（传 null 恢复竖杠）
+  maxConcurrency: 2, // 同时渲染的标签页上限（正整数，默认 1；调大前必读部署节风险提醒）
 });
 ```
 
@@ -688,8 +693,9 @@ configure({
 | `launchArgs`      | `string[]`         | `[]`          | 追加的浏览器启动参数                              |
 | `markerRegex`     | `RegExp \| null`   | 内置 `${...}` | 全局标记语法，调用级 option 优先；`null` 恢复内置 |
 | `markerSeparator` | `string \| null`   | `'\|'`        | 全局标记内部分隔符，调用级优先；`null` 恢复默认   |
+| `maxConcurrency`  | `number`（正整数） | `1`           | 同时渲染的标签页上限，超限排队；调用级 option 优先；设为 >1 时打一次性风险告警 |
 
-社区版只接受以上五键；`maxConcurrency` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `fontGuard` / `pageRotate` 等护栏键须由 Pro 经接缝声明后才接受，社区版传入静默忽略、按固定安全上限执行（见[部署](#deploy)），其余未知键也同样静默忽略。
+社区版接受以上六键；`maxCells` / `maxTemplateSize` / `memoryGuard` / `fontGuard` / `pageRotate` 等其余护栏键须由 Pro 经接缝声明后才接受，社区版传入静默忽略、按固定安全上限执行（见[部署](#deploy)），其余未知键也同样静默忽略。`maxConcurrency` 是唯一例外：社区版开放且严格校验（0/负数/小数/非数值抛 `E_OPTION_INVALID`，无「传 0 不限」语义）。
 
 这与 option 段的行为不同，是有意为之：option 是单次生成的入参，Pro 键与拼错的未知键都显式报错（快速失败 + 转化引导）；configure 是进程级配置，社区版对未声明的键宽容忽略、固定上限兜底。想让某个 Pro 护栏键被拦截报错，请放进 option 而非 configure。
 
@@ -697,6 +703,7 @@ configure({
 
 - 页面设置（pageSize / orientation / margin）：调用级 option > 模板 pageSetup > Excel 内建默认；
 - 标记语法（markerRegex / markerSeparator）：调用级 option > configure 全局 > 内置默认；
+- 渲染并发（maxConcurrency）：调用级 option > configure 全局 > 1；
 - 插件：调用级 `option.plugins` 与全局 `use()` 合并，同名以调用级为准（fieldResolvers 调用级先执行，transformModel 调用级后执行）。
 
 ---
@@ -718,7 +725,7 @@ configure({
 不需要。内置 Headless Chrome 渲染，不依赖任何 Office 引擎。
 
 **Q：可以并发调用吗？**
-固定单并发，超限排队。高并发场景需自行管理队列。
+可以。默认单并发、超限排队；1.4.0 起可经 `maxConcurrency`（正整数）调大，但社区版无内存守卫，调大前必读[部署节风险提醒](#deploy)。
 
 **Q：字体缺失怎么办？**
 交由 Chrome 字体回退渲染，缺字体时字形可能与 Excel 有差异。建议容器里装好模板所用字体（见[部署](#deploy)）。
