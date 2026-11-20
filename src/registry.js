@@ -18,7 +18,7 @@ function createPluginState() {
 /** 全局注册表（模块级单例） */
 const globalState = createPluginState();
 
-/** 全局已注册的插件名（重名覆盖告警用） */
+/** 全局已注册的插件名（重名注册告警用） */
 const globalNames = new Set();
 
 /** 内置标记类型（由 engine.js 注册；插件同名覆盖并告警） */
@@ -38,12 +38,8 @@ function applyPlugin(state, plugin, { warnName, warnBuiltin } = {}) {
       '[registry] 插件必须是对象',
       'A plugin must be an object.');
   }
-  if (plugin.name && warnName) {
-    if (warnName.has(plugin.name)) {
-      console.warn(`[registry] 插件 "${plugin.name}" 重名注册，新注册将覆盖旧注册`);
-    }
-    warnName.add(plugin.name);
-  }
+  // 先完整校验再统一提交（原子性）：中途失败不得留下半生效的全局状态
+  const markerEntries = [];
   if (plugin.markerTypes) {
     for (const [type, handler] of Object.entries(plugin.markerTypes)) {
       if (typeof handler !== 'function') {
@@ -51,12 +47,10 @@ function applyPlugin(state, plugin, { warnName, warnBuiltin } = {}) {
           `[registry] markerTypes.${type} 必须是函数`,
           `markerTypes.${type} must be a function.`);
       }
-      if (warnBuiltin && builtinMarkerTypes[type]) {
-        console.warn(`[registry] 标记类型 "${type}" 覆盖了内置类型`);
-      }
-      state.markerTypes.set(type, handler);
+      markerEntries.push([type, handler]);
     }
   }
+  const resolvers = [];
   if (plugin.fieldResolvers) {
     for (const resolver of plugin.fieldResolvers) {
       if (typeof resolver !== 'function') {
@@ -64,15 +58,30 @@ function applyPlugin(state, plugin, { warnName, warnBuiltin } = {}) {
           '[registry] fieldResolvers 项必须是函数',
           'Each fieldResolvers entry must be a function.');
       }
-      state.fieldResolvers.push(resolver);
+      resolvers.push(resolver);
     }
   }
-  if (plugin.transformModel) {
-    if (typeof plugin.transformModel !== 'function') {
-      throw xlsxError('E_PLUGIN_INVALID',
-        '[registry] transformModel 必须是函数',
-        'transformModel must be a function.');
+  if (plugin.transformModel && typeof plugin.transformModel !== 'function') {
+    throw xlsxError('E_PLUGIN_INVALID',
+      '[registry] transformModel 必须是函数',
+      'transformModel must be a function.');
+  }
+
+  // 提交阶段（以下不再有可能失败的校验）
+  if (plugin.name && warnName) {
+    if (warnName.has(plugin.name)) {
+      console.warn(`[registry] 插件 "${plugin.name}" 重名注册：markerTypes 同名覆盖，fieldResolvers/transformModel 按注册顺序追加`);
     }
+    warnName.add(plugin.name);
+  }
+  for (const [type, handler] of markerEntries) {
+    if (warnBuiltin && builtinMarkerTypes[type]) {
+      console.warn(`[registry] 标记类型 "${type}" 覆盖了内置类型`);
+    }
+    state.markerTypes.set(type, handler);
+  }
+  state.fieldResolvers.push(...resolvers);
+  if (plugin.transformModel) {
     state.transformModels.push(plugin.transformModel);
   }
 }
@@ -81,7 +90,7 @@ function applyPlugin(state, plugin, { warnName, warnBuiltin } = {}) {
  * 注册全局扩展插件（进程内生效）
  *
  * @param {Object} plugin
- * @param {string} [plugin.name] - 插件名（重名覆盖并告警）
+ * @param {string} [plugin.name] - 插件名（重名注册告警：markerTypes 同名覆盖，解析器/钩子按序追加）
  * @param {Object<string, Function>} [plugin.markerTypes] - 自定义标记类型
  *   handler 签名：async (value, option, ctx) => result；
  *   返回值契约：string → 文本替换；{ images: [{ dataUrl, width?, height?, offsetX?, offsetY?, zIndex?, opacity? }] } → 图片嵌入

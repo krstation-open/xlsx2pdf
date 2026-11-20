@@ -5,6 +5,7 @@
  *  - 预 abort 快速失败（不启动浏览器）
  *  - 渲染中 abort → E_CANCELLED，浏览器单例保留，后续任务正常
  *  - 排队中 abort → 从队列摘除不占槽位（限流 1 实证），后续任务不受阻
+ *  - 循环 abort 压力（1.6.2）：10 轮占槽→排队取消→放行，队列/槽位/标签页无残留
  * 运行：node test/cancel-guard.mjs（行为断言需浏览器，缺失时跳过）
  */
 import assert from 'node:assert';
@@ -120,6 +121,31 @@ try {
     const resC = await excel2pdf({ template: tplSmall, data: { name: 'c' } });
     assert.ok(resC.pdf.subarray(0, 5).toString() === '%PDF-', 'B 摘除后 C 应正常拿槽出片');
     console.log('  ✓ 排队摘除不占槽：A 不受影响，C 正常拿槽');
+
+    // ④ 循环 abort 压力（1.6.2）：10 轮「新闸门占槽 → 排队任务取消 → 放行出片」，
+    // 每轮末标签页回基线——验证反复取消后队列/槽位/标签页无残留、无死锁
+    for (let round = 1; round <= 10; round++) {
+      let entered = false;
+      let open = () => {};
+      const g = new Promise((r) => { open = r; });
+      releaseGate = open; // finally 兼顾失败路径：始终放行最新一轮闸门
+      registerSeams({ fontGuardCheck: async () => { entered = true; await g; } });
+      const pHold = excel2pdf({ template: tplSmall, data: { name: `h${round}` } });
+      pHold.catch(() => { /* 失败路径防未处理拒绝 */ });
+      for (let i = 0; i < 100 && !entered; i++) await new Promise((r) => setTimeout(r, 20));
+      assert.ok(entered, `第 ${round} 轮：占槽任务应进入闸门`);
+      const acQ = new AbortController();
+      const pQ = excel2pdf({ template: tplSmall, data: { name: `q${round}` }, option: { signal: acQ.signal } });
+      pQ.catch(() => { /* 同上 */ });
+      await new Promise((r) => setTimeout(r, 100)); // 小模板 buildHtml 极快，此时必已入队
+      acQ.abort();
+      await expectCancelled(`第 ${round} 轮排队 abort`, pQ);
+      open();
+      const resH = await pHold;
+      assert.ok(resH.pdf.subarray(0, 5).toString() === '%PDF-', `第 ${round} 轮：占槽任务正常出片`);
+      assert.strictEqual((await br.pages()).length, basePages, `第 ${round} 轮：标签页应回基线`);
+    }
+    console.log('  ✓ ④ 循环 abort 压力 10 轮：队列/槽位/标签页无残留');
 
     configure({ maxConcurrency: 1 }); // 复位（与默认一致，显式声明意图）
     console.log('[cancel-guard] 全部通过 ✅');

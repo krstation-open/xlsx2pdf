@@ -44,31 +44,39 @@ async function getBrowser() {
     return browser;
   }
 
-  // 防止并发启动多个浏览器
+  // 防止并发启动多个浏览器：共享 Promise 必须在第一个 await 之前就建立——
+  // 路径解析也是异步，若赋值晚于解析，冷启动的并发请求会各自 launch 出多实例
   if (launchPromise) {
     return launchPromise;
   }
 
-  // 浏览器解析顺序：configure({ browserPath }) > XLSX2PDF_BROWSER_PATH > 包内 browsers/ 内置 Chrome
-  // （路径解析基于模块自身位置，与 cwd 无关；缺失时报错引导补装）
-  const executablePath = await resolveBrowserPath();
-  const cfg = getConfig();
+  launchPromise = (async () => {
+    // 浏览器解析顺序：configure({ browserPath }) > XLSX2PDF_BROWSER_PATH > 包内 browsers/ 内置 Chrome
+    // （路径解析基于模块自身位置，与 cwd 无关；缺失时报错引导补装）
+    const executablePath = await resolveBrowserPath();
+    const cfg = getConfig();
+    try {
+      return await puppeteer.launch({
+        headless: cfg.headless,
+        executablePath,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          ...cfg.launchArgs,
+        ],
+      });
+    } catch (err) {
+      throw launchError(err, executablePath);
+    }
+  })();
 
-  launchPromise = puppeteer.launch({
-    headless: cfg.headless,
-    executablePath,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      ...cfg.launchArgs,
-    ],
-  }).catch((err) => {
+  try {
+    browser = await launchPromise;
+  } catch (err) {
     launchPromise = null;
-    throw launchError(err, executablePath);
-  });
-
-  browser = await launchPromise;
+    throw err;
+  }
   launchPromise = null;
 
   // 监听断开事件，自动清理；身份判定：仅当断开的是当前单例引用才置 null，
@@ -115,15 +123,20 @@ function acquireSlot(maxOverride, signal) {
   }
   return new Promise((resolve, reject) => {
     let onAbort;
-    const grant = () => {
-      if (onAbort) signal.removeEventListener('abort', onAbort);
-      runningPages++;
-      resolve();
+    // 队列条目携带自身上限：唤醒时复查（调用级上限可各不相同，
+    // 只查入队时点会让低上限请求在共享计数器下越限）
+    const entry = {
+      max,
+      grant: () => {
+        if (onAbort) signal.removeEventListener('abort', onAbort);
+        runningPages++;
+        resolve();
+      },
     };
-    waitQueue.push(grant);
+    waitQueue.push(entry);
     if (signal) {
       onAbort = () => {
-        const i = waitQueue.indexOf(grant);
+        const i = waitQueue.indexOf(entry);
         if (i !== -1) waitQueue.splice(i, 1);
         reject(cancelledError());
       };
@@ -136,11 +149,18 @@ function acquireSlot(maxOverride, signal) {
   });
 }
 
-/** 释放渲染槽位并唤醒排队中的下一个请求 */
+/** 释放渲染槽位并唤醒排队中第一个满足自身上限的请求（不满足的留队，后续释放再查；
+ * runningPages 归零时任何上限都放行，无死锁） */
 function releaseSlot() {
   runningPages--;
-  const next = waitQueue.shift();
-  if (next) next();
+  for (let i = 0; i < waitQueue.length; i++) {
+    const entry = waitQueue[i];
+    if (!entry.max || entry.max <= 0 || runningPages < entry.max) {
+      waitQueue.splice(i, 1);
+      entry.grant();
+      break;
+    }
+  }
 }
 
 /**
@@ -304,4 +324,4 @@ export async function htmlToPdf(html, option = {}) {
   }
 }
 
-export { getBrowser };
+export { getBrowser, acquireSlot, releaseSlot };

@@ -115,7 +115,9 @@ export async function resolveImageCached(cache, fieldValue, option, warnings) {
 
   const key = `${option.type}|${option.width}|${option.height}|${fieldValue}`;
   if (!cache.has(key)) {
-    cache.set(key, await resolveImage(fieldValue, option, warnings));
+    // 缓存 Promise 而非结果：同 key 并发调用共享同一次下载/编码，
+    // 避免 await 窗口内重复下载（引擎当前逐格串行，接缝/插件并行化时即触发）
+    cache.set(key, resolveImage(fieldValue, option, warnings));
   }
   return cache.get(key);
 }

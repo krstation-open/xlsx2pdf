@@ -7,6 +7,8 @@
  *  ③ 限流行为：上限 2 下并发请求峰值标签页 ≤ 2，排队不丢请求
  *  ④ 调用级 option.maxConcurrency 优先于 configure 全局
  *  ⑤ 设为 >1 且无内存守卫时打一次性运行期告警（进程内只提醒一次）
+ *  ⑥ 冷启动并发竞态（1.6.2）：关单例后并发 getBrowser 共享同一实例
+ *  ⑦ 混合上限调度（1.6.2）：排队请求按自身上限唤醒，队首阻塞不挡后来者
  * 运行：node test/concurrency-option-guard.mjs（行为断言需可用浏览器，缺失时跳过）
  */
 import assert from 'node:assert';
@@ -16,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { excel2pdf, excel2html, configure, closeBrowser, Xlsx2pdfError } from '../src/index.js';
 import { builtinExecutablePath, getConfig } from '../src/browser.js';
-import { getBrowser } from '../src/pdf.js';
+import { getBrowser, acquireSlot, releaseSlot } from '../src/pdf.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.join(here, 'output');
@@ -119,6 +121,41 @@ if (!hasBrowser) {
   assert.ok(callRun.peak <= LIMIT, `调用级上限 ${LIMIT}，峰值应 ≤ ${LIMIT}，实际 ${callRun.peak}`);
   assert.ok(callRun.peak >= LIMIT, `调用级应覆盖全局 1，峰值应 ≥ ${LIMIT}，实际 ${callRun.peak}`);
   console.log(`  ✓ 调用级覆盖全局：峰值 ${callRun.peak}（全局 1 → 调用级 ${LIMIT}）`);
+
+  // ⑥ 冷启动并发竞态（1.6.2）：关闭单例后 8 路并发 getBrowser 必须共享同一实例
+  // （旧实现 launchPromise 赋值晚于路径解析 await，冷启动并发会各自 launch）
+  await closeBrowser();
+  const racers = await Promise.all(Array.from({ length: 8 }, () => getBrowser()));
+  assert.ok(racers.every((b) => b === racers[0]), '冷启动并发应共享同一浏览器实例');
+  assert.ok(racers[0].isConnected(), '共享实例应处于连接状态');
+  console.log('  ✓ ⑥ 冷启动并发：8 路请求共享同一浏览器实例');
+
+  // ⑦ 混合上限调度（1.6.2，单元级直用内部槽位）：排队条目按自身上限唤醒，
+  // 队首低上限阻塞时后来高上限条目可越队；归零时任何上限都放行（无死锁）
+  configure({ maxConcurrency: 4 });
+  await acquireSlot(4); await acquireSlot(4); await acquireSlot(4); await acquireSlot(4); // running=4
+  let dDone = false;
+  const pD = acquireSlot(1).then(() => { dDone = true; }); // 4≥1 → 入队
+  let eDone = false;
+  const pE = acquireSlot(4).then(() => { eDone = true; }); // 4≥4 → 入队（排在 D 后）
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(dDone, false, 'D(max=1) 在 running=4 时应排队');
+  assert.strictEqual(eDone, false, 'E(max=4) 在 running=4 时应排队');
+  releaseSlot(); // running=3：D 需 <1 不满足留队；E 需 <4 满足 → 越队唤醒
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(eDone, true, 'running=3 满足 E 自身上限，应越队唤醒');
+  assert.strictEqual(dDone, false, 'D 自身上限未满足，不得被唤醒（旧实现会在此越限）');
+  releaseSlot(); // running=3（E 占槽后 4→3）：D 仍不满足
+  releaseSlot(); // running=2
+  releaseSlot(); // running=1
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(dDone, false, 'running≥1 期间 D(max=1) 始终不得唤醒');
+  releaseSlot(); // running=0 → D 放行
+  await pD;
+  assert.strictEqual(dDone, true, 'running 归零后 D 应放行（无死锁）');
+  await pE;
+  releaseSlot(); // 释放 D 的槽位，running 归零
+  console.log('  ✓ ⑦ 混合上限：按条目自身上限唤醒，队首阻塞不挡后来者，归零必放行');
 
   await closeBrowser();
 }

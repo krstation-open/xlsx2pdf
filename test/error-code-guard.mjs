@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { excel2html, excel2pdf, configure, use, helpers, Xlsx2pdfError } from '../src/index.js';
+import { resolveEffectivePlugins, lookupMarkerType } from '../src/registry.js';
 import { builtinExecutablePath } from '../src/browser.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -167,6 +168,22 @@ try {
   await expectCode('markerTypes 项非函数',
     () => use({ markerTypes: { bad: 'not-a-function' } }),
     'E_PLUGIN_INVALID', '必须是函数', 'must be a function');
+
+  // 注册原子性（1.6.2）：前两部分合法但 transformModel 非法 → 整体失败，不留半生效全局状态
+  const beforeAtomic = resolveEffectivePlugins();
+  await expectCode('插件注册原子性（transformModel 非法）',
+    () => use({
+      name: 'atomic-probe',
+      markerTypes: { atomicprobe: async () => 'x' },
+      fieldResolvers: [async () => undefined],
+      transformModel: 'not-a-function',
+    }),
+    'E_PLUGIN_INVALID', 'transformModel 必须是函数', 'transformModel must be a function');
+  const afterAtomic = resolveEffectivePlugins();
+  assert.strictEqual(lookupMarkerType('atomicprobe', afterAtomic), null, '失败注册不得残留 markerTypes');
+  assert.strictEqual(afterAtomic.fieldResolvers.length, beforeAtomic.fieldResolvers.length, '失败注册不得残留 fieldResolvers');
+  assert.strictEqual(afterAtomic.transformModels.length, beforeAtomic.transformModels.length, '失败注册不得残留 transformModel');
+  console.log('  ✓ 插件注册原子性：失败不留半生效全局状态');
 
   await expectCode('generateCode 不支持的类型',
     () => helpers.generateCode('ean13', '123'),

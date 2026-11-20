@@ -1,4 +1,5 @@
-# CI：build + 红线扫描 + 全部守卫（ESM/CJS 冒烟 / 富媒体 / 明细行 / 错误码 / CLI）
+# CI：build + 红线扫描 + 全部守卫（ESM/CJS 冒烟 / 富媒体 / 明细行 / 错误码 / CLI /
+# 健壮性 / 取消 / 并发 / MDW）
 # 矩阵 Node 18/20/22 × ubuntu/windows；内置 Chrome 走安装缓存（命中秒级跳过，
 # 未命中经镜像源下载；Linux 系统依赖由安装脚本自动 apt 补齐）。
 name: CI
@@ -70,3 +71,15 @@ jobs:
 
       - name: CLI guard
         run: npm run test:cli
+
+      - name: Robustness guard
+        run: npm run test:robustness
+
+      - name: Cancel guard
+        run: npm run test:cancel
+
+      - name: Concurrency guard
+        run: npm run test:concurrency
+
+      - name: MDW guard
+        run: npm run test:mdw

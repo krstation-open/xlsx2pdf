@@ -6,6 +6,7 @@
  *  - 雅黑族独立判定（1.6.1：中/英文名均命中，11pt → 9px，不误触 CJK 等宽表）
  *  - 等线/DengXian 有意走西文分支（数字度量与 Calibri 同源，11pt → 7px）
  *  - 西文字体保守比例（Calibri/TNR 11 → 7px）；默认字体缺失维持公开常数 7
+ *  - 字体别名与多字号覆盖（1.6.2 扩充：NSimSun/SimHei/KaiTi/FangSong、雅黑 10、西文 9/12）
  *  - 列宽换算沿用 Excel 官方公式；seams.resolveMdw 注入时优先（Pro 覆盖边界不变）
  * 运行：node test/mdw-guard.mjs（无需浏览器）
  */
@@ -34,6 +35,18 @@ assert.strictEqual(resolveCoreMdw({ name: 'Microsoft YaHei', size: 11 }), 9, '�
 assert.strictEqual(resolveCoreMdw({ name: '微软雅黑', size: 9 }), 7, '雅黑 9 → 7');
 assert.strictEqual(resolveCoreMdw({ name: '微软雅黑', size: 12 }), 9, '雅黑 12 → 9');
 assert.strictEqual(resolveCoreMdw({ name: 'Microsoft YaHei', size: 14 }), 11, '雅黑 14 按 11pt→9 推算 → 11');
+// 1.6.2 扩充：别名命中与多字号覆盖（锁定启发式表契约，非跨环境实测值）
+assert.strictEqual(resolveCoreMdw({ name: 'NSimSun', size: 11 }), 8, 'NSimSun 别名命中 CJK 表');
+assert.strictEqual(resolveCoreMdw({ name: 'SimHei', size: 11 }), 8, 'SimHei 别名命中 CJK 表');
+assert.strictEqual(resolveCoreMdw({ name: 'KaiTi', size: 11 }), 8, 'KaiTi 别名命中 CJK 表');
+assert.strictEqual(resolveCoreMdw({ name: 'FangSong', size: 11 }), 8, 'FangSong 别名命中 CJK 表');
+assert.strictEqual(resolveCoreMdw({ name: '微软雅黑', size: 10 }), 8, '雅黑 10 → 8');
+assert.strictEqual(resolveCoreMdw({ name: 'Calibri', size: 9 }), 6, 'Calibri 9 → 6');
+assert.strictEqual(resolveCoreMdw({ name: 'Calibri', size: 12 }), 8, 'Calibri 12 → 8');
+assert.strictEqual(resolveCoreMdw({ name: 'Times New Roman', size: 9 }), 6, 'TNR 9 → 6');
+assert.strictEqual(resolveCoreMdw({ name: 'Times New Roman', size: 12 }), 8, 'TNR 12 → 8');
+assert.strictEqual(resolveCoreMdw({ name: 'DengXian', size: 9 }), 6, 'DengXian 9 走西文表 → 6');
+assert.strictEqual(resolveCoreMdw({ name: 'DengXian', size: 12 }), 8, 'DengXian 12 走西文表 → 8');
 assert.strictEqual(resolveCoreMdw(null), CORE_DEFAULT_MDW, '默认字体缺失维持 7');
 assert.strictEqual(resolveCoreMdw({ name: '宋体' }), CORE_DEFAULT_MDW, '无字号维持 7');
 console.log('  ✓ 常见字体启发式表（CJK 查表/推算、雅黑族独立、等线走西文、缺失回退 7）');
