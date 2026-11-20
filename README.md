@@ -95,7 +95,7 @@ If all you want is to turn any xlsx into a PDF as-is, LibreOffice or a dedicated
 
 A few things we value about it: the template is just plain Excel, so business users don't have to learn a new tool; nothing native to compile and no Office dragged in on install; rendering goes through Chrome, so output is consistent across Windows / Linux / macOS; the fiddly bits that usually break — merged cells, rich text, numFmt — are handled and tested; and marker types, field resolvers and model hooks are all extensible.
 
-We should also be clear about the community edition's limits: column width uses a public-formula approximation, and for layouts that are extremely precision-sensitive, Pro offers pixel-accurate column width and single-page auto-fit. It's just a Node.js library — to use it from another language, run a small Node service and call it over HTTP, or hang a Node sidecar off your app.
+We should also be clear about the community edition's limits: column widths follow Excel's official formula using the workbook's default font (a built-in heuristic table covers common fonts such as SimSun, so Chinese templates no longer render narrow), while for extremely precision-sensitive layouts Pro adds browser-measured per-column correction and single-page auto-fit. It's just a Node.js library — to use it from another language, run a small Node service and call it over HTTP, or hang a Node sidecar off your app.
 
 ---
 
@@ -339,7 +339,7 @@ The community edition can take a single text / rich-media report all the way thr
 | Detail-row index mapping (#array.field)                            |               ✅                |                       ✅                       |
 | Array multi-page batch (data array → N pages)                      |               ❌                |                       ✅                       |
 | Single-page auto-fit (overflow converges to one page, no clipping) |               ❌                |                       ✅                       |
-| Column-width precision                                             |  public-formula approximation   | pixel-accurate conversion + font-missing guard |
+| Column-width precision                                             |  official formula + common-font heuristic (1.6.0)   | browser-measured pixel accuracy + font-missing guard |
 | Custom paper (receipt rolls) direct read                           |               ❌                |                       ✅                       |
 | Landscape WPS / Clodop (a browser print control) print adaptation  |               ❌                |                       ✅                       |
 | Concurrency / memory-admission guard                               | concurrency configurable (default 1, no memory guard) | parameterized guardrails + memory admission |

@@ -14,11 +14,8 @@ import {
 } from './registry.js';
 import { imageLikeHandler } from './markers.js';
 import { normalizeImageSizes } from './image.js';
+import { resolveCoreMdw } from './mdw.js';
 import { xlsxError, isCodedError, throwIfAborted } from './errors.js';
-
-// 列宽度量基准 MDW：核心按公开常数 7（Calibri 11pt）换算；
-// 按字体/字号精确取值的增强实现由商业版经 seams.resolveMdw 注入
-const CORE_DEFAULT_MDW = 7;
 
 /**
  * 定位 zip 条目并返回压缩块（中央目录解析，不解压）
@@ -185,8 +182,8 @@ function parseDefaultFont(buf) {
   }
 }
 
-// 自定义纸张文件内宽高解包与按字体/字号精确取值的 MDW 度量均为商业版增强实现，
-// 分别经 seams.readCustomPaper / seams.resolveMdw 注入；核心缺省不解包、MDW 取公开常数
+// 自定义纸张文件内宽高解包为商业版增强实现，经 seams.readCustomPaper 注入，核心缺省不解包；
+// MDW 度量核心内置常见字体启发式表（mdw.js），商业版经 seams.resolveMdw 注入覆盖
 
 /**
  * Excel 列宽（字符宽单位）→ px，按 Excel 官方公式换算：
@@ -384,7 +381,7 @@ export async function processTemplate(templateSource, data, option = {}) {
   // 固定系数会把列渲染得偏窄，导致 Excel 中单行的文本转 PDF 后被挤换行
   const defaultFont = parseDefaultFont(buffer);
   const seams = getSeams();
-  const mdw = seams.resolveMdw ? seams.resolveMdw(workbook, defaultFont) : CORE_DEFAULT_MDW;
+  const mdw = seams.resolveMdw ? seams.resolveMdw(workbook, defaultFont) : resolveCoreMdw(defaultFont);
   const columnWidths = [];
   const columnWidthUnits = []; // 原始字符宽单位，供商业版注入的浏览器端度量脚本重算
   for (let c = 1; c <= columnCount; c++) {
