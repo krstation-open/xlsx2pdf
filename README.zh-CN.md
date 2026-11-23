@@ -330,21 +330,22 @@ data: { items: [{ name: '甲' }, { name: '乙' }] }
 
 社区版能独立把单份文本 / 富媒体报表从头到尾做完，不是砍了功能的试用版。Pro 主要解决批量、高并发、以及对排版精度特别敏感的生产场景。两者用的是同一套渲染管线。
 
-| 能力                                          |        社区版        |           Pro 版            |
-| :-------------------------------------------- | :------------------: | :-------------------------: |
-| 单文档文本 / 富媒体报表                       |          ✅          |             ✅              |
-| 图片 / 二维码 / 条形码基础嵌入                |          ✅          |             ✅              |
-| 图片自动压缩 + DPI 感知尺寸                   |          ❌          |             ✅              |
-| autoInsertImage / 水印标记                    |          ❌          |             ✅              |
-| 明细行索引映射（#数组.字段）                  |          ✅          |             ✅              |
-| 数组多页批量（data 数组 → N 页）              |          ❌          |             ✅              |
-| 单页自适应排版（字号/行高调整，带下限约束与溢出告警）  |          ❌          |             ✅              |
-| 列宽精度                                      |     官方公式 + 常见字体启发式（1.6.0）     | 浏览器实测像素级 + 缺字体守卫 |
-| 自定义纸张（小票卷纸）直读                    |          ❌          |             ✅              |
-| 横向页 WPS / Clodop（浏览器打印控件）打印适配 |          ❌          |             ✅              |
-| 并发渲染 / 内存准入守卫                       | 并发可配（默认 1，无内存守卫） | 参数化护栏 + 内存准入守卫 |
-| 自定义扩展（三扩展点 + 自定义语法）           |          ✅          |             ✅              |
-| 许可                                          | Apache-2.0，免费商用 |          商业 EULA          |
+| 能力                                                  |               社区版               |            Pro 版             |
+| :---------------------------------------------------- | :--------------------------------: | :---------------------------: |
+| 单文档文本 / 富媒体报表                               |                 ✅                 |              ✅               |
+| 图片 / 二维码 / 条形码基础嵌入                        |                 ✅                 |              ✅               |
+| 图片自动压缩 + DPI 感知尺寸                           |                 ❌                 |              ✅               |
+| autoInsertImage / 水印标记                            |                 ❌                 |              ✅               |
+| 明细行索引映射（#数组.字段）                          |                 ✅                 |              ✅               |
+| 数组多页批量（data 数组 → N 页）                      |                 ❌                 |              ✅               |
+| 多页分批出片（`batchSize`，批间并发限流）              |                 ❌                 |              ✅               |
+| 单页自适应排版（字号/行高调整，带下限约束与溢出告警） |                 ❌                 |              ✅               |
+| 列宽精度                                              | 官方公式 + 常见字体启发式（1.6.0） | 浏览器实测像素级 + 缺字体守卫 |
+| 自定义纸张（小票卷纸）直读                            |                 ❌                 |              ✅               |
+| 横向页 WPS / Clodop（浏览器打印控件）打印适配         |                 ❌                 |              ✅               |
+| 并发渲染 / 内存准入守卫                               |   并发可配（默认 1，无内存守卫）   |   参数化护栏 + 内存准入守卫   |
+| 自定义扩展（三扩展点 + 自定义语法）                   |                 ✅                 |              ✅               |
+| 许可                                                  |        Apache-2.0，免费商用        |           商业 EULA           |
 
 表里的「单页自适应排版」单独解释一下。动态业务数据经常超出模板预留的空间：文本溢出、行高不够、页面打不完整。社区版内容超页时走 Chrome 原生分页，可能截断或跨页；Pro 的自适应排版基于浏览器实际渲染结果，在保留模板视觉结构的前提下调整字号与行高，尽可能把内容完整收敛到一页。字号调整受全局下限与单元格级下限（`minsize`）约束；行高按内容实际占用调整；含图片、条码、二维码、水印的行受保护、不参与压缩。设计目标不是像素级复刻 Excel 的字号行高，而是生成完整、清晰、适合打印的单页 PDF。边界也说清楚：字号与行高都有下限，极端内容仍装不下时，剩余溢出会被裁剪并输出告警——自适应排版是在约束允许范围内尽可能适配单页，不是无条件保证单页完整。快递单、固定发票、检验报告这类「必须一页」的场景尤其关键。
 
@@ -380,9 +381,9 @@ data: { items: [{ name: '甲' }, { name: '乙' }] }
 | CLI（`xlsx2pdf convert`）                                   |    ☑     | 1.3.0    |                                                                     |
 | 稳定错误码 + 双语报错 + 错误对照文档                        |    ☑     | 1.3.0    |                                                                     |
 | GitHub Actions CI + 状态徽章                                |    ☑     | 1.3.0    |                                                                     |
-| 渲染并发参数化（`maxConcurrency`）                          |    ☑     | 1.4.0    | 默认 1，只接受正整数；无内存守卫，调大风险见部署节                |
-| 生成取消（`option.signal` / `E_CANCELLED`）                 |    ☑     | 1.5.0    | 排队摘除 + 渲染中断，协作式尽力终止                              |
-| 降级告警通道（`warnings`）+ 图片内容校验                    |    ☑     | 1.5.0    | 单图/单标记失败降级不抛错，告警可程序化消费                    |
+| 渲染并发参数化（`maxConcurrency`）                          |    ☑     | 1.4.0    | 默认 1，只接受正整数；无内存守卫，调大风险见部署节                  |
+| 生成取消（`option.signal` / `E_CANCELLED`）                 |    ☑     | 1.5.0    | 排队摘除 + 渲染中断，协作式尽力终止                                 |
+| 降级告警通道（`warnings`）+ 图片内容校验                    |    ☑     | 1.5.0    | 单图/单标记失败降级不抛错，告警可程序化消费                         |
 | 多工作表选择（`option.sheet`）                              |    ☐     |          |                                                                     |
 | 隐藏行 / 列过滤                                             |    ☐     |          |                                                                     |
 | 读取模板已嵌入的图片                                        |    ☐     |          |                                                                     |
@@ -402,7 +403,7 @@ data: { items: [{ name: '甲' }, { name: '乙' }] }
 
 ### Pro 专属（社区版不提供）
 
-图片自动压缩 + DPI 感知尺寸、autoInsertImage、watermark 标记、数组多页批量、单页自适应排版（字号/行高调整、下限约束、溢出告警）、像素级列宽 + 缺字体守卫、自定义纸张直读、横向页国产打印控件适配、精确缩放、内存守卫与模板规模护栏参数化。效果对照见[社区版 vs Pro 版](#compare)。
+图片自动压缩 + DPI 感知尺寸、autoInsertImage、watermark 标记、数组多页批量、多页分批出片（batchSize）、单页自适应排版（字号/行高调整、下限约束、溢出告警）、像素级列宽 + 缺字体守卫、自定义纸张直读、横向页国产打印控件适配、精确缩放、内存守卫与模板规模护栏参数化。效果对照见[社区版 vs Pro 版](#compare)。
 
 ---
 
@@ -463,10 +464,10 @@ configure({ browserPath: '/usr/bin/chromium' });
 
 ### 安全上限（默认值）
 
-| 项       | 默认  | 说明                                              |
-| :------- | :---- | :------------------------------------------------ |
-| 模板体积 | 5MB   | 超限报错拒绝生成                                  |
-| 单元格数 | 20000 | 实际行×列，超限报错（加载前另有流式预检提前拦截） |
+| 项       | 默认      | 说明                                                         |
+| :------- | :-------- | :----------------------------------------------------------- |
+| 模板体积 | 5MB       | 超限报错拒绝生成                                             |
+| 单元格数 | 20000     | 实际行×列，超限报错（加载前另有流式预检提前拦截）            |
 | 渲染并发 | 1（可配） | 同时打开的标签页上限，超限排队；只接受正整数，风险见下方提醒 |
 
 模板体积与单元格数在社区版是固定默认值，不开放参数化；`maxCells` / `maxTemplateSize` / `memoryGuard` 等护栏参数化属 Pro 能力，社区版经 option 传入会显式报错引导（configure 则静默忽略，见 [API](#api)）。渲染并发自 1.4.0 起开放参数化（`maxConcurrency`，configure 与调用级 option 均可，默认 1 不变）。远程资源（模板 URL / 图片 URL）下载带 30 秒超时与 20MB 体积上限，失败统一抛带稳定错误码（`E_DOWNLOAD_*`）的双语报错并附 URL，见 [docs/errors.md](./docs/errors.md)。
@@ -515,13 +516,13 @@ handler 签名 `async (value, option, ctx) => result`。
 
 **ctx 上下文字段**：
 
-| 字段          | 类型     | 说明                                                                                           |
-| :------------ | :------- | :--------------------------------------------------------------------------------------------- |
-| `data`        | `object` | 本次生成的完整数据对象（未拍平的原始结构，可直接 `ctx.data.a.b` 取嵌套值）                     |
-| `field`       | `string` | 标记字段名（`#数组` 语法已展开为带下标点路径，如 `items.0.spec`）                              |
-| `row` / `col` | `number` | 单元格行 / 列号（1 起）                                                                        |
-| `imageCache`  | `Map`    | 本次生成的图片缓存（key = 类型\|宽\|高\|值）；自定义图片类 handler 可复用它避免重复下载 / 编码 |
-| `numFmt`      | `string` | 单元格数字格式，配合 `helpers.formatValue` 复用 numFmt 渲染                                    |
+| 字段          | 类型       | 说明                                                                                                           |
+| :------------ | :--------- | :------------------------------------------------------------------------------------------------------------- |
+| `data`        | `object`   | 本次生成的完整数据对象（未拍平的原始结构，可直接 `ctx.data.a.b` 取嵌套值）                                     |
+| `field`       | `string`   | 标记字段名（`#数组` 语法已展开为带下标点路径，如 `items.0.spec`）                                              |
+| `row` / `col` | `number`   | 单元格行 / 列号（1 起）                                                                                        |
+| `imageCache`  | `Map`      | 本次生成的图片缓存（key = 类型\|宽\|高\|值）；自定义图片类 handler 可复用它避免重复下载 / 编码                 |
+| `numFmt`      | `string`   | 单元格数字格式，配合 `helpers.formatValue` 复用 numFmt 渲染                                                    |
 | `warnings`    | `string[]` | 本次生成的降级告警收集数组；自定义 handler 可 push 告警，随返回结果 `warnings` 透出（见[降级告警](#warnings)） |
 
 **option 字段**（标记 `|` 之后的解析结果）：`type`（类型名）、`width` / `height` / `offsetX` / `offsetY` / `zIndex` / `opacity` / `minSize` / `lineHeight`（`w120_h40` 等数字参数）、`defaultValue`（`_default:` / `_默认:` / `_dft:`）；其余 `key:value` 自定义键值原样透传（如 `format:YYYY年` → `option.format`）。
@@ -628,17 +629,17 @@ use({
 
 ## API
 
-| 函数            | 签名                                                                    | 说明                                                                                       |
-| :-------------- | :---------------------------------------------------------------------- | :----------------------------------------------------------------------------------------- |
-| `excel2pdf`     | `({ template, data, option }) → Promise<{ pdf: Buffer, html: string, warnings: string[] }>` | 一站式生成：模板解析 → HTML 渲染 → 无头 Chrome 打印 PDF；warnings 见[降级告警](#warnings) |
+| 函数            | 签名                                                                                        | 说明                                                                                       |
+| :-------------- | :------------------------------------------------------------------------------------------ | :----------------------------------------------------------------------------------------- |
+| `excel2pdf`     | `({ template, data, option }) → Promise<{ pdf: Buffer, html: string, warnings: string[] }>` | 一站式生成：模板解析 → HTML 渲染 → 无头 Chrome 打印 PDF；warnings 见[降级告警](#warnings)  |
 | `excel2html`    | `({ template, data, option }) → Promise<{ html: string, warnings: string[] }>`              | 参数与 excel2pdf 一致，只走模板解析 + HTML 渲染，不启动浏览器                              |
-| `configure`     | `(option?) → Readonly<BrowserOptions>`                                  | 浏览器行为与标记语法全局配置（模块级单例），返回当前生效配置                               |
-| `ensureBrowser` | `(option?) → Promise<string>`                                           | 确保内置浏览器就绪（幂等；`{ force: true }` 强制重装），返回可执行文件路径                 |
-| `closeBrowser`  | `() → Promise<void>`                                                    | 关闭复用的单例浏览器（通常在进程退出时调用）                                               |
-| `use`           | `(plugin) → void`                                                       | 全局注册扩展插件（三扩展点，见[扩展](#extend)）                                            |
-| `helpers`       | 命名空间                                                                | 扩展开发工具方法（引擎同源，见[扩展](#extend)）                                            |
-| `getVersion`    | `() → string`                                                           | 当前包版本（运行时读取安装目录 package.json，首次调用后缓存；缺失 / 损坏兜底 `'unknown'`） |
-| `Xlsx2pdfError` | `class extends Error`                                                   | 所有抛出错误均带稳定 `code` + 双语文案；全表见 [docs/errors.md](./docs/errors.md)      |
+| `configure`     | `(option?) → Readonly<BrowserOptions>`                                                      | 浏览器行为与标记语法全局配置（模块级单例），返回当前生效配置                               |
+| `ensureBrowser` | `(option?) → Promise<string>`                                                               | 确保内置浏览器就绪（幂等；`{ force: true }` 强制重装），返回可执行文件路径                 |
+| `closeBrowser`  | `() → Promise<void>`                                                                        | 关闭复用的单例浏览器（通常在进程退出时调用）                                               |
+| `use`           | `(plugin) → void`                                                                           | 全局注册扩展插件（三扩展点，见[扩展](#extend)）                                            |
+| `helpers`       | 命名空间                                                                                    | 扩展开发工具方法（引擎同源，见[扩展](#extend)）                                            |
+| `getVersion`    | `() → string`                                                                               | 当前包版本（运行时读取安装目录 package.json，首次调用后缓存；缺失 / 损坏兜底 `'unknown'`） |
+| `Xlsx2pdfError` | `class extends Error`                                                                       | 所有抛出错误均带稳定 `code` + 双语文案；全表见 [docs/errors.md](./docs/errors.md)          |
 
 ### excel2pdf 入参
 
@@ -659,10 +660,10 @@ use({
 | `plugins`         | `Plugin[]`                                        | `[]`                          | 调用级扩展，仅本次生成生效，同名覆盖全局 `use()`                                                 |
 | `markerRegex`     | `RegExp`（g 标志 + 捕获组 1）                     | 内置 `${...}`                 | 自定义标记匹配规则，优先于 configure 全局                                                        |
 | `markerSeparator` | `string`                                          | `'\|'`                        | 标记内「字段 / 类型\_参数」分隔符，优先于 configure 全局                                         |
-| `maxConcurrency`  | `number`（正整数）                                | `1`                           | 同时渲染的标签页上限，超限排队；优先于 configure 全局；调大风险见[部署](#deploy) |
-| `signal`          | `AbortSignal`                                     | 无                            | 取消信号：排队摘除 / 渲染中断，抛 `E_CANCELLED`，见[取消](#cancel)              |
+| `maxConcurrency`  | `number`（正整数）                                | `1`                           | 同时渲染的标签页上限，超限排队；优先于 configure 全局；调大风险见[部署](#deploy)                 |
+| `signal`          | `AbortSignal`                                     | 无                            | 取消信号：排队摘除 / 渲染中断，抛 `E_CANCELLED`，见[取消](#cancel)                               |
 
-页面设置类（pageSize / orientation / margin）优先级：**调用级 option > 模板 pageSetup > Excel 内建默认**。Pro 专属 option 键（`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders`）社区版传入即显式报错引导；未知 option 键同样拒绝（拼错入参不被静默忽略）。注意：configure 对同类护栏键是静默忽略而非报错，差异原因见下文 configure(option)。
+页面设置类（pageSize / orientation / margin）优先级：**调用级 option > 模板 pageSetup > Excel 内建默认**。Pro 专属 option 键（`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders` / `batchSize`）社区版传入即显式报错引导；未知 option 键同样拒绝（拼错入参不被静默忽略）。注意：configure 对同类护栏键是静默忽略而非报错，差异原因见下文 configure(option)。
 
 `defaults` 是全局兜底：当 `data` 缺某字段、且该标记没写默认值时，用 `defaults` 里的同名值。取值顺序为 **data → 标记内默认值 → `option.defaults`**：
 
@@ -692,16 +693,16 @@ configure({
 });
 ```
 
-| 键                | 类型               | 默认          | 说明                                              |
-| :---------------- | :----------------- | :------------ | :------------------------------------------------ |
-| `browserPath`     | `string`           | 无            | 外部浏览器可执行文件路径，优先于内置与环境变量    |
-| `headless`        | `boolean \| 'new'` | `'new'`       | puppeteer 无头模式                                |
-| `launchArgs`      | `string[]`         | `[]`          | 追加的浏览器启动参数                              |
-| `markerRegex`     | `RegExp \| null`   | 内置 `${...}` | 全局标记语法，调用级 option 优先；`null` 恢复内置 |
-| `markerSeparator` | `string \| null`   | `'\|'`        | 全局标记内部分隔符，调用级优先；`null` 恢复默认   |
+| 键                | 类型               | 默认          | 说明                                                                           |
+| :---------------- | :----------------- | :------------ | :----------------------------------------------------------------------------- |
+| `browserPath`     | `string`           | 无            | 外部浏览器可执行文件路径，优先于内置与环境变量                                 |
+| `headless`        | `boolean \| 'new'` | `'new'`       | puppeteer 无头模式                                                             |
+| `launchArgs`      | `string[]`         | `[]`          | 追加的浏览器启动参数                                                           |
+| `markerRegex`     | `RegExp \| null`   | 内置 `${...}` | 全局标记语法，调用级 option 优先；`null` 恢复内置                              |
+| `markerSeparator` | `string \| null`   | `'\|'`        | 全局标记内部分隔符，调用级优先；`null` 恢复默认                                |
 | `maxConcurrency`  | `number`（正整数） | `1`           | 同时渲染的标签页上限，超限排队；调用级 option 优先；设为 >1 时打一次性风险告警 |
 
-社区版接受以上六键；`maxCells` / `maxTemplateSize` / `memoryGuard` / `fontGuard` / `pageRotate` 等其余护栏键须由 Pro 经接缝声明后才接受，社区版传入静默忽略、按固定安全上限执行（见[部署](#deploy)），其余未知键也同样静默忽略。`maxConcurrency` 是唯一例外：社区版开放且严格校验（0/负数/小数/非数值抛 `E_OPTION_INVALID`，无「传 0 不限」语义）。
+社区版接受以上六键；`maxCells` / `maxTemplateSize` / `memoryGuard` / `fontGuard` / `pageRotate` 等其余护栏键须由 Pro 经接缝声明后才接受，社区版传入静默忽略、按固定安全上限执行（见[部署](#deploy)），其余未知键也同样静默忽略。`batchSize` 只走调用级 option，configure 两版均不接受。`maxConcurrency` 是唯一例外：社区版开放且严格校验（0/负数/小数/非数值抛 `E_OPTION_INVALID`，无「传 0 不限」语义）。
 
 这与 option 段的行为不同，是有意为之：option 是单次生成的入参，Pro 键与拼错的未知键都显式报错（快速失败 + 转化引导）；configure 是进程级配置，社区版对未声明的键宽容忽略、固定上限兜底。想让某个 Pro 护栏键被拦截报错，请放进 option 而非 configure。
 
@@ -724,7 +725,9 @@ setTimeout(() => ac.abort(), 5000); // 5 秒后取消
 try {
   const { pdf } = await excel2pdf({ template: './tpl.xlsx', data, option: { signal: ac.signal } });
 } catch (err) {
-  if (err.code === 'E_CANCELLED') { /* 预期内的取消 */ }
+  if (err.code === 'E_CANCELLED') {
+    /* 预期内的取消 */
+  }
 }
 ```
 

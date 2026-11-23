@@ -330,21 +330,22 @@ Detail-row count is fixed by the template: extra rows are cleared when data is s
 
 The community edition can take a single text / rich-media report all the way through on its own — it's not a feature-cut trial. Pro is mainly for batch, high-concurrency, and production cases that are especially picky about layout precision. Both use the same rendering pipeline.
 
-| Capability                                                         |            Community            |                      Pro                       |
-| :----------------------------------------------------------------- | :-----------------------------: | :--------------------------------------------: |
-| Single-document text / rich-media reports                          |               ✅                |                       ✅                       |
-| Image / QR / barcode basic embedding                               |               ✅                |                       ✅                       |
-| Automatic image compression + DPI-aware sizing                     |               ❌                |                       ✅                       |
-| autoInsertImage / watermark markers                                |               ❌                |                       ✅                       |
-| Detail-row index mapping (#array.field)                            |               ✅                |                       ✅                       |
-| Array multi-page batch (data array → N pages)                      |               ❌                |                       ✅                       |
-| Single-page adaptive layout (font-size & row-height adjustment, minimum constraints, overflow warning) |               ❌                |                       ✅                       |
-| Column-width precision                                             |  official formula + common-font heuristic (1.6.0)   | browser-measured pixel accuracy + font-missing guard |
-| Custom paper (receipt rolls) direct read                           |               ❌                |                       ✅                       |
-| Landscape WPS / Clodop (a browser print control) print adaptation  |               ❌                |                       ✅                       |
-| Concurrency / memory-admission guard                               | concurrency configurable (default 1, no memory guard) | parameterized guardrails + memory admission |
-| Custom extensions (3 points + custom syntax)                       |               ✅                |                       ✅                       |
-| License                                                            | Apache-2.0, free commercial use |                commercial EULA                 |
+| Capability                                                                                             |                       Community                       |                         Pro                          |
+| :----------------------------------------------------------------------------------------------------- | :---------------------------------------------------: | :--------------------------------------------------: |
+| Single-document text / rich-media reports                                                              |                          ✅                           |                          ✅                          |
+| Image / QR / barcode basic embedding                                                                   |                          ✅                           |                          ✅                          |
+| Automatic image compression + DPI-aware sizing                                                         |                          ❌                           |                          ✅                          |
+| autoInsertImage / watermark markers                                                                    |                          ❌                           |                          ✅                          |
+| Detail-row index mapping (#array.field)                                                                |                          ✅                           |                          ✅                          |
+| Array multi-page batch (data array → N pages)                                                          |                          ❌                           |                          ✅                          |
+| Batched multi-page output (`batchSize`, concurrency-limited between batches)                             |                          ❌                           |                          ✅                          |
+| Single-page adaptive layout (font-size & row-height adjustment, minimum constraints, overflow warning) |                          ❌                           |                          ✅                          |
+| Column-width precision                                                                                 |   official formula + common-font heuristic (1.6.0)    | browser-measured pixel accuracy + font-missing guard |
+| Custom paper (receipt rolls) direct read                                                               |                          ❌                           |                          ✅                          |
+| Landscape WPS / Clodop (a browser print control) print adaptation                                      |                          ❌                           |                          ✅                          |
+| Concurrency / memory-admission guard                                                                   | concurrency configurable (default 1, no memory guard) |     parameterized guardrails + memory admission      |
+| Custom extensions (3 points + custom syntax)                                                           |                          ✅                           |                          ✅                          |
+| License                                                                                                |            Apache-2.0, free commercial use            |                   commercial EULA                    |
 
 The "single-page adaptive layout" row deserves a plain explanation. With dynamic business data, text often outgrows the space the template reserved: content overflows, row heights fall short, and the page no longer prints complete. In the community edition, overflow goes through native Chrome pagination and may clip or span pages. Pro's adaptive layout works from the browser's actual rendering: it adjusts font sizes and row heights to fit the content onto one page while keeping the template's visual structure. Font-size adjustment respects a global floor and a per-cell floor (`minsize`); row heights follow the space the content actually needs; rows carrying images, barcodes, QR codes or watermarks are protected from compression. The goal is not pixel-level replication of Excel's font sizes and row heights, but a complete, readable, print-ready single page. The boundary is explicit: font sizes and row heights have minimums, and when extreme content still cannot fit, the remaining overflow is clipped and a warning is emitted — adaptive layout fits one page as far as the constraints allow, it does not guarantee it unconditionally. This matters for "must be one page" cases like shipping labels, fixed invoices and inspection reports.
 
@@ -358,51 +359,51 @@ The "single-page adaptive layout" row deserves a plain explanation. With dynamic
 
 Every feature in one table, with a checkbox for implementation status: ☑ implemented (carrying the version it landed in), ☐ not yet implemented (no version shown — subject to actual releases). Pro-only capabilities are listed by effect name at the end of this section; per-version details are in [CHANGELOG.md](./CHANGELOG.md).
 
-| Feature                                                                                               | Status | Since | Note                                                                          |
-| :---------------------------------------------------------------------------------------------------- | :----: | :---- | :---------------------------------------------------------------------------- |
-| `excel2pdf` / `excel2html` dual outlets                                                               |   ☑    | 1.0.0 | one-stop PDF generation / HTML-only render, no browser launch                 |
-| Marker substitution: basic fields / nested dot paths / marker defaults / in-cell multi-segment mixing |   ☑    | 1.0.0 | each segment substituted independently, inheriting local rich-text formatting |
-| Style fidelity: merged cells / font / color / background / borders / in-cell rich text                |   ☑    | 1.0.0 | merged-region outer borders take the union of edge cells                      |
-| numFmt number-format inheritance                                                                      |   ☑    | 1.0.0 | both marker cells and static number/date cells render in their format         |
-| Standard paper / orientation / margins (template-owned)                                               |   ☑    | 1.0.0 | A3/A4/A5/B4/B5/letter/legal                                                   |
-| Bundled headless Chrome / external browser reuse                                                      |   ☑    | 1.0.0 | browserPath, XLSX2PDF_BROWSER_PATH, download can be skipped                   |
-| Three extension points + two registration levels                                                      |   ☑    | 1.0.0 | markerTypes / fieldResolvers / transformModel; use / option.plugins           |
-| Custom marker syntax                                                                                  |   ☑    | 1.0.0 | markerRegex / markerSeparator                                                 |
-| helpers utility namespace                                                                             |   ☑    | 1.0.0 | grew to 7 in 1.1.0 (added generateCode / bufferToDataUrl)                     |
-| ESM / CJS dual output + TypeScript declarations                                                       |   ☑    | 1.0.0 |                                                                               |
-| Template-size / cell-count safety caps                                                                |   ☑    | 1.0.0 | 5MB / 20000 cells, fixed values                                               |
-| image / img markers                                                                                   |   ☑    | 1.1.0 | local path / http(s) URL / base64 DataUrl                                     |
-| barcode (Code128) / qrcode markers                                                                    |   ☑    | 1.1.0 | PNG generated by bwip-js                                                      |
-| Overlay params w/h/ox/oy/zindex/opacity                                                               |   ☑    | 1.1.0 | shared by image / barcode / QR                                                |
-| Pure-JS image size normalization                                                                      |   ☑    | 1.1.0 | unset size normalizes to original dimensions at 96 DPI; no compression           |
-| Detail-row index mapping `#array.field`                                                               |   ☑    | 1.2.0 | row count fixed by the template, not a dynamic loop                           |
-| Examples directory + `npm run example` one-shot output                                                |   ☑    | 1.3.0 |                                                                               |
-| CLI (`xlsx2pdf convert`)                                                                              |   ☑    | 1.3.0 |                                                                               |
-| Stable error codes + bilingual messages + error reference doc                                         |   ☑    | 1.3.0 |                                                                               |
-| GitHub Actions CI + status badges                                                                     |   ☑    | 1.3.0 |                                                                               |
-| Render concurrency parameterization (`maxConcurrency`)                                                |   ☑    | 1.4.0 | default 1, positive integers only; no memory guard — see Deployment risk note |
-| Generation cancellation (`option.signal` / `E_CANCELLED`)                                             |   ☑    | 1.5.0 | queue removal + render interruption, cooperative best-effort                    |
+| Feature                                                                                               | Status | Since | Note                                                                                           |
+| :---------------------------------------------------------------------------------------------------- | :----: | :---- | :--------------------------------------------------------------------------------------------- |
+| `excel2pdf` / `excel2html` dual outlets                                                               |   ☑    | 1.0.0 | one-stop PDF generation / HTML-only render, no browser launch                                  |
+| Marker substitution: basic fields / nested dot paths / marker defaults / in-cell multi-segment mixing |   ☑    | 1.0.0 | each segment substituted independently, inheriting local rich-text formatting                  |
+| Style fidelity: merged cells / font / color / background / borders / in-cell rich text                |   ☑    | 1.0.0 | merged-region outer borders take the union of edge cells                                       |
+| numFmt number-format inheritance                                                                      |   ☑    | 1.0.0 | both marker cells and static number/date cells render in their format                          |
+| Standard paper / orientation / margins (template-owned)                                               |   ☑    | 1.0.0 | A3/A4/A5/B4/B5/letter/legal                                                                    |
+| Bundled headless Chrome / external browser reuse                                                      |   ☑    | 1.0.0 | browserPath, XLSX2PDF_BROWSER_PATH, download can be skipped                                    |
+| Three extension points + two registration levels                                                      |   ☑    | 1.0.0 | markerTypes / fieldResolvers / transformModel; use / option.plugins                            |
+| Custom marker syntax                                                                                  |   ☑    | 1.0.0 | markerRegex / markerSeparator                                                                  |
+| helpers utility namespace                                                                             |   ☑    | 1.0.0 | grew to 7 in 1.1.0 (added generateCode / bufferToDataUrl)                                      |
+| ESM / CJS dual output + TypeScript declarations                                                       |   ☑    | 1.0.0 |                                                                                                |
+| Template-size / cell-count safety caps                                                                |   ☑    | 1.0.0 | 5MB / 20000 cells, fixed values                                                                |
+| image / img markers                                                                                   |   ☑    | 1.1.0 | local path / http(s) URL / base64 DataUrl                                                      |
+| barcode (Code128) / qrcode markers                                                                    |   ☑    | 1.1.0 | PNG generated by bwip-js                                                                       |
+| Overlay params w/h/ox/oy/zindex/opacity                                                               |   ☑    | 1.1.0 | shared by image / barcode / QR                                                                 |
+| Pure-JS image size normalization                                                                      |   ☑    | 1.1.0 | unset size normalizes to original dimensions at 96 DPI; no compression                         |
+| Detail-row index mapping `#array.field`                                                               |   ☑    | 1.2.0 | row count fixed by the template, not a dynamic loop                                            |
+| Examples directory + `npm run example` one-shot output                                                |   ☑    | 1.3.0 |                                                                                                |
+| CLI (`xlsx2pdf convert`)                                                                              |   ☑    | 1.3.0 |                                                                                                |
+| Stable error codes + bilingual messages + error reference doc                                         |   ☑    | 1.3.0 |                                                                                                |
+| GitHub Actions CI + status badges                                                                     |   ☑    | 1.3.0 |                                                                                                |
+| Render concurrency parameterization (`maxConcurrency`)                                                |   ☑    | 1.4.0 | default 1, positive integers only; no memory guard — see Deployment risk note                  |
+| Generation cancellation (`option.signal` / `E_CANCELLED`)                                             |   ☑    | 1.5.0 | queue removal + render interruption, cooperative best-effort                                   |
 | Degradation warnings channel (`warnings`) + image content validation                                  |   ☑    | 1.5.0 | single image/marker failures degrade instead of throwing; warnings consumable programmatically |
-| Multi-worksheet selection (`option.sheet`)                                                            |   ☐    |       |                                                                               |
-| Hidden row / column filtering                                                                         |   ☐    |       |                                                                               |
-| Reading images already embedded in the template                                                       |   ☐    |       |                                                                               |
-| Hyperlinks → clickable PDF links                                                                      |   ☐    |       |                                                                               |
-| Text rotation / indent                                                                                |   ☐    |       |                                                                               |
-| More barcode symbologies (EAN13 / Code39 etc.) + QR error-correction level                            |   ☐    |       |                                                                               |
-| Print area / repeating title rows                                                                     |   ☐    |       |                                                                               |
-| Header / footer / page numbers                                                                        |   ☐    |       |                                                                               |
-| TS type exports for plugin context and model                                                          |   ☐    |       |                                                                               |
-| Static template validation `validateTemplate`                                                         |   ☐    |       |                                                                               |
-| Render event hook (stage / timing observability)                                                      |   ☐    |       |                                                                               |
-| Official plugin examples (date formatting / enum mapping / i18n / uppercase amount)                   |   ☐    |       |                                                                               |
-| Browser idle auto-reclaim                                                                             |   ☐    |       |                                                                               |
-| Template parse caching                                                                                |   ☐    |       |                                                                               |
-| URL-fetch safety options (allowlist / timeout / size cap)                                             |   ☐    |       |                                                                               |
-| Official Docker image                                                                                 |   ☐    |       |                                                                               |
+| Multi-worksheet selection (`option.sheet`)                                                            |   ☐    |       |                                                                                                |
+| Hidden row / column filtering                                                                         |   ☐    |       |                                                                                                |
+| Reading images already embedded in the template                                                       |   ☐    |       |                                                                                                |
+| Hyperlinks → clickable PDF links                                                                      |   ☐    |       |                                                                                                |
+| Text rotation / indent                                                                                |   ☐    |       |                                                                                                |
+| More barcode symbologies (EAN13 / Code39 etc.) + QR error-correction level                            |   ☐    |       |                                                                                                |
+| Print area / repeating title rows                                                                     |   ☐    |       |                                                                                                |
+| Header / footer / page numbers                                                                        |   ☐    |       |                                                                                                |
+| TS type exports for plugin context and model                                                          |   ☐    |       |                                                                                                |
+| Static template validation `validateTemplate`                                                         |   ☐    |       |                                                                                                |
+| Render event hook (stage / timing observability)                                                      |   ☐    |       |                                                                                                |
+| Official plugin examples (date formatting / enum mapping / i18n / uppercase amount)                   |   ☐    |       |                                                                                                |
+| Browser idle auto-reclaim                                                                             |   ☐    |       |                                                                                                |
+| Template parse caching                                                                                |   ☐    |       |                                                                                                |
+| URL-fetch safety options (allowlist / timeout / size cap)                                             |   ☐    |       |                                                                                                |
+| Official Docker image                                                                                 |   ☐    |       |                                                                                                |
 
 ### Pro-only (not in the community edition)
 
-Automatic image compression + DPI-aware sizing, autoInsertImage, watermark markers, array multi-page batch, single-page adaptive layout (font-size / row-height adjustment, minimum constraints, overflow warning), pixel-accurate column width + font-missing guard, custom paper direct read, landscape print-control adaptation, precise scaling, parameterized memory guard / template-size guardrails. Effect-level comparison in [Community vs Pro](#compare).
+Automatic image compression + DPI-aware sizing, autoInsertImage, watermark markers, array multi-page batch, batched multi-page output (batchSize), single-page adaptive layout (font-size / row-height adjustment, minimum constraints, overflow warning), pixel-accurate column width + font-missing guard, custom paper direct read, landscape print-control adaptation, precise scaling, parameterized memory guard / template-size guardrails. Effect-level comparison in [Community vs Pro](#compare).
 
 ---
 
@@ -463,10 +464,10 @@ Browser resolution precedence: `configure({ browserPath })` > the `XLSX2PDF_BROW
 
 ### Safety caps (defaults)
 
-| Item               | Default | Note                                                                                |
-| :----------------- | :------ | :---------------------------------------------------------------------------------- |
-| Template size      | 5MB     | reject beyond cap                                                                   |
-| Cell count         | 20000   | actual rows×cols; reject beyond cap (streaming pre-check rejects early before load) |
+| Item               | Default          | Note                                                                                  |
+| :----------------- | :--------------- | :------------------------------------------------------------------------------------ |
+| Template size      | 5MB              | reject beyond cap                                                                     |
+| Cell count         | 20000            | actual rows×cols; reject beyond cap (streaming pre-check rejects early before load)   |
 | Render concurrency | 1 (configurable) | max simultaneously open tabs; excess queued; positive integers only — risk note below |
 
 Template size and cell count are fixed defaults in the community edition and are not parameterized; guardrail parameterization such as `maxCells` / `maxTemplateSize` / `memoryGuard` is a Pro capability; passing them via option in the community edition raises an explicit guidance error (configure silently ignores them instead — see [API](#api)). Render concurrency is parameterized since 1.4.0 (`maxConcurrency`, via configure or per-call option; the default of 1 is unchanged). Remote resources (template URL / image URL) download with a 30-second timeout and a 20MB size cap; failures throw a coded error (`E_DOWNLOAD_*`) with a bilingual message and the URL attached — see [docs/errors.md](./docs/errors.md).
@@ -515,13 +516,13 @@ Handler signature: `async (value, option, ctx) => result`.
 
 **ctx fields**:
 
-| Field         | Type     | Meaning                                                                                                                                      |
-| :------------ | :------- | :------------------------------------------------------------------------------------------------------------------------------------------- |
-| `data`        | `object` | the full data object for this generation (unflattened original structure; read nested values directly via `ctx.data.a.b`)                    |
-| `field`       | `string` | marker field name (`#array` syntax already expanded to an indexed dot path, e.g. `items.0.spec`)                                             |
-| `row` / `col` | `number` | cell row / column number (1-based)                                                                                                           |
-| `imageCache`  | `Map`    | image cache for this generation (key = type\|width\|height\|value); custom image handlers can reuse it to avoid repeated download / encoding |
-| `numFmt`      | `string` | the cell's number format, paired with `helpers.formatValue` to reuse numFmt rendering                                                        |
+| Field         | Type       | Meaning                                                                                                                                                          |
+| :------------ | :--------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data`        | `object`   | the full data object for this generation (unflattened original structure; read nested values directly via `ctx.data.a.b`)                                        |
+| `field`       | `string`   | marker field name (`#array` syntax already expanded to an indexed dot path, e.g. `items.0.spec`)                                                                 |
+| `row` / `col` | `number`   | cell row / column number (1-based)                                                                                                                               |
+| `imageCache`  | `Map`      | image cache for this generation (key = type\|width\|height\|value); custom image handlers can reuse it to avoid repeated download / encoding                     |
+| `numFmt`      | `string`   | the cell's number format, paired with `helpers.formatValue` to reuse numFmt rendering                                                                            |
 | `warnings`    | `string[]` | degradation-warning collector for this generation; custom handlers can push warnings, surfaced via the result `warnings` (see [Degradation warnings](#warnings)) |
 
 **option fields** (parsed result after the marker's `|`): `type` (type name), `width` / `height` / `offsetX` / `offsetY` / `zIndex` / `opacity` / `minSize` / `lineHeight` (numeric params like `w120_h40`), `defaultValue` (`_default:` / `_默认:` / `_dft:`); other `key:value` custom pairs pass through as-is (e.g. `format:YYYY年` → `option.format`).
@@ -628,17 +629,17 @@ Engine-homologous utilities are exposed under the `helpers` namespace (`import {
 
 ## API
 
-| Function        | Signature                                                               | Description                                                                                                                                            |
-| :-------------- | :---------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `excel2pdf`     | `({ template, data, option }) → Promise<{ pdf: Buffer, html: string, warnings: string[] }>` | one-stop generation: template parse → HTML render → headless Chrome print PDF; warnings see [Degradation warnings](#warnings) |
+| Function        | Signature                                                                                   | Description                                                                                                                                            |
+| :-------------- | :------------------------------------------------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `excel2pdf`     | `({ template, data, option }) → Promise<{ pdf: Buffer, html: string, warnings: string[] }>` | one-stop generation: template parse → HTML render → headless Chrome print PDF; warnings see [Degradation warnings](#warnings)                          |
 | `excel2html`    | `({ template, data, option }) → Promise<{ html: string, warnings: string[] }>`              | same params as excel2pdf; template parse + HTML render only, no browser launch                                                                         |
-| `configure`     | `(option?) → Readonly<BrowserOptions>`                                  | global browser behavior & marker syntax (module-level singleton); returns the effective config                                                         |
-| `ensureBrowser` | `(option?) → Promise<string>`                                           | ensure the bundled browser is ready (idempotent; `{ force: true }` reinstalls); returns the executable path                                            |
-| `closeBrowser`  | `() → Promise<void>`                                                    | close the reused singleton browser (usually on process exit)                                                                                           |
-| `use`           | `(plugin) → void`                                                       | register an extension plugin globally (three points, see [Extensions](#extend))                                                                        |
-| `helpers`       | namespace                                                               | extension-development utilities (engine-homologous, see [Extensions](#extend))                                                                         |
-| `getVersion`    | `() → string`                                                           | current package version (read at runtime from the install dir's package.json, cached after first call; falls back to `'unknown'` if missing / corrupt) |
-| `Xlsx2pdfError` | `class extends Error`                                                   | every thrown error carries a stable `code` + bilingual message; full table in [docs/errors.md](./docs/errors.md)                                     |
+| `configure`     | `(option?) → Readonly<BrowserOptions>`                                                      | global browser behavior & marker syntax (module-level singleton); returns the effective config                                                         |
+| `ensureBrowser` | `(option?) → Promise<string>`                                                               | ensure the bundled browser is ready (idempotent; `{ force: true }` reinstalls); returns the executable path                                            |
+| `closeBrowser`  | `() → Promise<void>`                                                                        | close the reused singleton browser (usually on process exit)                                                                                           |
+| `use`           | `(plugin) → void`                                                                           | register an extension plugin globally (three points, see [Extensions](#extend))                                                                        |
+| `helpers`       | namespace                                                                                   | extension-development utilities (engine-homologous, see [Extensions](#extend))                                                                         |
+| `getVersion`    | `() → string`                                                                               | current package version (read at runtime from the install dir's package.json, cached after first call; falls back to `'unknown'` if missing / corrupt) |
+| `Xlsx2pdfError` | `class extends Error`                                                                       | every thrown error carries a stable `code` + bilingual message; full table in [docs/errors.md](./docs/errors.md)                                       |
 
 ### excel2pdf parameters
 
@@ -660,9 +661,9 @@ Engine-homologous utilities are exposed under the `helpers` namespace (`import {
 | `markerRegex`     | `RegExp` (g flag + capture group 1)               | built-in `${...}`                               | custom marker matching, takes precedence over configure global                                                                                      |
 | `markerSeparator` | `string`                                          | `'\|'`                                          | the internal "field / type_params" separator, takes precedence over configure global                                                                |
 | `maxConcurrency`  | `number` (positive integer)                       | `1`                                             | max simultaneously rendering tabs, excess queued; over configure global; raising risk in [Deployment](#deploy)                                      |
-| `signal`          | `AbortSignal`                                     | none                                            | cancellation signal: queue removal / render interruption, throws `E_CANCELLED`, see [Cancellation](#cancel)                                          |
+| `signal`          | `AbortSignal`                                     | none                                            | cancellation signal: queue removal / render interruption, throws `E_CANCELLED`, see [Cancellation](#cancel)                                         |
 
-Page-setup params (pageSize / orientation / margin) precedence: **per-call option > template pageSetup > Excel built-in defaults**. Pro-only option keys (`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders`) raise an explicit guidance error when passed in the community edition; unknown option keys are likewise rejected (a typo is never silently ignored). Note: configure silently ignores the same guardrail keys rather than throwing — see configure(option) below for why.
+Page-setup params (pageSize / orientation / margin) precedence: **per-call option > template pageSetup > Excel built-in defaults**. Pro-only option keys (`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders` / `batchSize`) raise an explicit guidance error when passed in the community edition; unknown option keys are likewise rejected (a typo is never silently ignored). Note: configure silently ignores the same guardrail keys rather than throwing — see configure(option) below for why.
 
 `defaults` is a global fallback: when `data` lacks a field and that marker has no default, the same-named value in `defaults` is used. Resolution order is **data → marker-level default → `option.defaults`**:
 
@@ -692,16 +693,16 @@ configure({
 });
 ```
 
-| Key               | Type               | Default           | Meaning                                                              |
-| :---------------- | :----------------- | :---------------- | :------------------------------------------------------------------- |
-| `browserPath`     | `string`           | none              | external browser executable path, over bundled and env var           |
-| `headless`        | `boolean \| 'new'` | `'new'`           | puppeteer headless mode                                              |
-| `launchArgs`      | `string[]`         | `[]`              | extra browser launch args                                            |
-| `markerRegex`     | `RegExp \| null`   | built-in `${...}` | global marker syntax, per-call option wins; `null` restores built-in |
-| `markerSeparator` | `string \| null`   | `'\|'`            | global internal separator, per-call wins; `null` restores default    |
-| `maxConcurrency`  | `number` (positive integer) | `1`       | max simultaneously rendering tabs, excess queued; per-call option wins; one-time risk warning when set above 1 |
+| Key               | Type                        | Default           | Meaning                                                                                                        |
+| :---------------- | :-------------------------- | :---------------- | :------------------------------------------------------------------------------------------------------------- |
+| `browserPath`     | `string`                    | none              | external browser executable path, over bundled and env var                                                     |
+| `headless`        | `boolean \| 'new'`          | `'new'`           | puppeteer headless mode                                                                                        |
+| `launchArgs`      | `string[]`                  | `[]`              | extra browser launch args                                                                                      |
+| `markerRegex`     | `RegExp \| null`            | built-in `${...}` | global marker syntax, per-call option wins; `null` restores built-in                                           |
+| `markerSeparator` | `string \| null`            | `'\|'`            | global internal separator, per-call wins; `null` restores default                                              |
+| `maxConcurrency`  | `number` (positive integer) | `1`               | max simultaneously rendering tabs, excess queued; per-call option wins; one-time risk warning when set above 1 |
 
-The community edition accepts these six keys; the remaining guardrail keys (`maxCells` / `maxTemplateSize` / `memoryGuard` / `fontGuard` / `pageRotate`) are accepted only after Pro declares them via seams — in the community edition they are silently ignored and the fixed safety caps apply (see [Deployment](#deploy)); any other unknown keys are silently ignored too. `maxConcurrency` is the one exception: open to the community edition and strictly validated (0 / negatives / fractions / non-numbers throw `E_OPTION_INVALID`; there is no "0 = unlimited" semantics).
+The community edition accepts these six keys; the remaining guardrail keys (`maxCells` / `maxTemplateSize` / `memoryGuard` / `fontGuard` / `pageRotate`) are accepted only after Pro declares them via seams — in the community edition they are silently ignored and the fixed safety caps apply (see [Deployment](#deploy)); any other unknown keys are silently ignored too. `batchSize` is per-call option only; configure does not accept it in either edition. `maxConcurrency` is the one exception: open to the community edition and strictly validated (0 / negatives / fractions / non-numbers throw `E_OPTION_INVALID`; there is no "0 = unlimited" semantics).
 
 This differs from the option section on purpose: option is per-generation input, where Pro keys and mistyped unknown keys both raise an explicit error (fail fast + conversion guidance); configure is process-level configuration, where the community edition tolerantly ignores undeclared keys and falls back to the fixed caps. If you want a Pro guardrail key to be intercepted with an error, put it in option rather than configure.
 
@@ -724,7 +725,9 @@ setTimeout(() => ac.abort(), 5000); // cancel after 5 seconds
 try {
   const { pdf } = await excel2pdf({ template: './tpl.xlsx', data, option: { signal: ac.signal } });
 } catch (err) {
-  if (err.code === 'E_CANCELLED') { /* expected cancellation */ }
+  if (err.code === 'E_CANCELLED') {
+    /* expected cancellation */
+  }
 }
 ```
 
