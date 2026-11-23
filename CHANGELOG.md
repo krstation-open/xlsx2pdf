@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-11-24
+
+### Changed
+
+- Multi-page batch performance: template parsing and data filling are now separated — the template skeleton is parsed once per call and reused across pages, and buffer / precheck / font / image caches are shared across pages within a call. Single-page and multi-page HTML output is byte-identical to 1.6.2 (verified by a 13-case byte-comparison harness covering plain, detail-row, image and real static templates).
+- Multi-page render scripts can be injected once per document through the new internal `scriptPreamble` seam (no community behavior change; consumed by Pro).
+- The landscape `/Rotate` rewrite pass is skipped when every page is portrait by geometry (Pro-only path; no output change).
+
+### Added
+
+- Internal `mergePdf` seam and Pro-only option key `batchSize` (positive integer, default 10): when the page count exceeds `batchSize`, Pro renders in batches and merges the results in page order, with inter-batch concurrency bounded by the existing guardrails. The community edition raises the standard guidance error when `batchSize` is passed via option; configure does not accept the key in either edition.
+- README (EN/zh-CN): comparison-matrix row and Pro-only list entry for batched multi-page output; option / configure sections document the `batchSize` entry-point difference.
+
 ## [1.6.2] - 2026-11-20
 
 ### Fixed
