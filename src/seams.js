@@ -26,6 +26,8 @@ const seams = {
   optimizeImages: null,
 
   // —— 渲染脚本接缝（缺省空串 = 不注入任何脚本，超页走浏览器原生分页） ——
+  /** () => string：多页共用函数源单次注入（head）；缺省 null（逐页内联全量源码） */
+  scriptPreamble: null,
   /** (p) => string：列宽实测校正脚本 */
   measureScript: null,
   /** (pageId, fitEnabled, cfg) => string：单页自适应脚本 */
@@ -46,6 +48,8 @@ const seams = {
   fontGuardModes: null,
   /** async (pdfBuf) => Buffer：横向页 /Rotate 改写；缺省原样返回 */
   rotateLandscape: null,
+  /** async (buffers) => Buffer：多批出片产物按序合并；缺省 null（不分批，单文档出片） */
+  mergePdf: null,
 
   // —— 配置接缝 ——
   /** configure 额外接受的键（护栏参数化等）；缺省仅浏览器三键 */

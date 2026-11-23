@@ -102,6 +102,12 @@ export interface GenerateOptions {
    */
   maxConcurrency?: number;
   /**
+   * 分批出片批大小（商业版 Pro 能力，传入抛 E_OPTION_PRO），只接受正整数，默认 10。
+   * 页数超过此值时分批独立标签页渲染再合并（批间并发受 maxConcurrency 限流），
+   * 每批纸张取批内首页，顺带支持跨批混合纸张/方向；不超过时保持单文档出片。
+   */
+  batchSize?: number;
+  /**
    * 取消信号（AbortSignal，如 new AbortController().signal；非法类型抛 E_OPTION_INVALID）。
    * 协作式尽力终止：已排队请求从队列摘除不占槽位，渲染中关闭标签页中断 CDP 调用，
    * 多页批量逐页检查；取消抛 E_CANCELLED，浏览器单例保留复用。

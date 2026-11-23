@@ -234,6 +234,7 @@ export function colWidthToPx(width, mdw) {
  * @property {number} [maxCells] - 模板单元格数上限（实际行×列；超限报错，0/负数不限）
  * @property {string[]} [warnings] - 调用级降级告警收集数组（入口创建，逐次生成独立，并发安全）
  * @property {AbortSignal} [signal] - 取消信号（已 abort 时抛 E_CANCELLED）
+ * @property {Object} [shared] - 内部：调用级共享上下文（多页批量由 buildHtml 创建，非公开入参）
  */
 
 /**
@@ -254,26 +255,36 @@ function hasCellVisualStyle(cell) {
 }
 
 /**
- * 核心：处理 Excel 模板，解析并替换标记，返回 WorksheetModel
+ * 解析模板骨架（与数据无关的部分，一次生成只解析一遍）：
+ * 模板读取/守卫、ExcelJS 加载、几何/边框/页面设置/默认字体、逐格静态建模。
+ * 多页批量（data 数组）经 buildHtml 复用同一骨架逐页 fillSkeleton，
+ * 避免同一份模板被重复读取/解包/加载（性能优化，输出与单趟解析逐字节一致）
  *
  * @param {string|Buffer} templateSource - 模板来源（本地路径/URL/Buffer）
- * @param {Object} data - 数据对象
  * @param {EngineOptions} [option]
- * @returns {Promise<Object>} WorksheetModel
+ * @returns {Promise<Object>} TemplateSkeleton（内部结构，供 fillSkeleton 消费）
  */
-export async function processTemplate(templateSource, data, option = {}) {
+export async function parseTemplateSkeleton(templateSource, option = {}) {
   // 取消预检：已 abort 的请求不进入模板加载/下载
   throwIfAborted(option.signal);
 
+  // 调用级共享上下文：多页批量时由 buildHtml 创建并跨页复用（同一模板只取一次 buffer、
+  // 只做一次 zip 预检/字体解析/页面设置提取）；图片缓存同样调用级共享——跨页不变的
+  // logo/签名/印章只下载与编码一次。单页调用缺省自建，行为与历史单趟解析一致
+  const shared = option.shared || {};
+
   // 1. 加载模板（读取/下载失败统一包装为 E_TEMPLATE_LOAD；已带码的下载错误原样重抛）
-  let buffer;
-  try {
-    buffer = await getFileBuffer(templateSource);
-  } catch (err) {
-    if (isCodedError(err)) throw err;
-    throw xlsxError('E_TEMPLATE_LOAD',
-      `[xlsx2pdf] 模板读取失败：${err.message}`,
-      `Failed to read the template: ${err.message}`);
+  let buffer = shared.buffer;
+  if (!buffer) {
+    try {
+      buffer = await getFileBuffer(templateSource);
+    } catch (err) {
+      if (isCodedError(err)) throw err;
+      throw xlsxError('E_TEMPLATE_LOAD',
+        `[xlsx2pdf] 模板读取失败：${err.message}`,
+        `Failed to read the template: ${err.message}`);
+    }
+    shared.buffer = buffer;
   }
 
   // 体积守卫：超大文件会让 ExcelJS 内存模型与后续整条链路成比例膨胀，
@@ -292,7 +303,11 @@ export async function processTemplate(templateSource, data, option = {}) {
   // 省掉大文件加载的近 500MB 瞬时堆占用（估算值不可信时由加载后实测守卫兜底）
   const maxCells = option.maxCells;
   if (maxCells > 0) {
-    const declared = await declaredCellCount(buffer, maxCells);
+    let declared = shared.declared;
+    if (declared === undefined) {
+      declared = await declaredCellCount(buffer, maxCells);
+      shared.declared = declared;
+    }
     if (declared !== null && declared > maxCells) {
       throw xlsxError('E_CELL_CAP',
         `[xlsx2pdf] 模板过大：预检估算约 ${declared} 个单元格，单元格数超过上限 ${maxCells}。` +
@@ -318,8 +333,8 @@ export async function processTemplate(templateSource, data, option = {}) {
       'The template contains no worksheet to render.');
   }
 
-  // 2. 拍平数据
-  const flatData = flattenObject(data);
+  // 2. 扩展上下文与标记语法（骨架期确定：同一调用内 plugins/markerRegex 恒定，
+  // 逐格标记解析结果可随骨架复用；数据取值在 fillSkeleton 阶段进行）
   const globalDefaults = option.defaults || {};
 
   // 扩展上下文：全局插件 + 调用级 option.plugins 合并（冲突时调用级覆盖）
@@ -379,7 +394,8 @@ export async function processTemplate(templateSource, data, option = {}) {
   // 3c. 收集列宽（仅取实际使用的列）
   // 列宽单位基于工作簿默认字体的数字字符宽（MDW），须用官方公式换算，
   // 固定系数会把列渲染得偏窄，导致 Excel 中单行的文本转 PDF 后被挤换行
-  const defaultFont = parseDefaultFont(buffer);
+  const defaultFont = shared.defaultFont !== undefined ? shared.defaultFont : parseDefaultFont(buffer);
+  shared.defaultFont = defaultFont;
   const seams = getSeams();
   const mdw = seams.resolveMdw ? seams.resolveMdw(workbook, defaultFont) : resolveCoreMdw(defaultFont);
   const columnWidths = [];
@@ -446,7 +462,8 @@ export async function processTemplate(templateSource, data, option = {}) {
   }
 
   // 提取模板页面设置（自定义纸张时解包读文件内 paperWidth/paperHeight 兜底）
-  const pageSetup = await extractPageSetup(worksheet, buffer);
+  const pageSetup = shared.pageSetup || await extractPageSetup(worksheet, buffer);
+  shared.pageSetup = pageSetup;
 
   // 构建边框推断上下文
   const borderCtx = {
@@ -460,11 +477,9 @@ export async function processTemplate(templateSource, data, option = {}) {
     findNearestBorderInRange,
   };
 
-  // 4. 遍历单元格、解析标记
-  const cells = [];
-  const arrayIndexMap = {}; // 记录 #数组.字段 的序号
-  // 同一份报告里同一张图（签名/条码）常被多处引用，缓存避免重复下载与重复编码
-  const imageCache = new Map();
+  // 4. 遍历单元格：静态格（无标记）直接完成建模；标记格只记录解析件，
+  // 数据相关的取值/handler/富文本替换留待 fillSkeleton 逐页执行
+  const entries = [];
 
   const rows = [];
   worksheet.eachRow((r) => rows.push(r));
@@ -483,30 +498,89 @@ export async function processTemplate(templateSource, data, option = {}) {
       const cellText = displayCellText(cell);
       const markers = parseCellMarkers(cellText, knownTypes, markerRegex, markerSeparator);
 
-      // 无标记 → 尝试 key 匹配插入图片（商业版接缝），否则原样保留
+      // 无标记 → 静态格：骨架期完成建模（autoInsertImage 依赖数据，留待填充期）
       if (markers.length === 0) {
         const cellModel = buildCellModel(cell, merges, worksheet, borderCtx, defaultFont);
-        let imageMatched = false;
-        if (seams.autoInsertImage) {
-          imageMatched = await seams.autoInsertImage({
-            cell, cellText, cellModel, flatData, columnWidths, rowHeights, imageCache,
-          });
-        }
-        // 模板富文本局部格式（Excel 单元格内局部加粗/斜体/颜色等）：无样式差异时保持纯文本输出零变化
-        if (!imageMatched) {
-          const runBounds = richTextSegStyles(cell, cellText, defaultFont?.size ?? null);
-          if (runBounds) {
-            cellModel.segments = runBounds
-              .filter((b) => b.end > b.start)
-              .map((b) => (b.style ? { text: cellText.slice(b.start, b.end), ...b.style } : { text: cellText.slice(b.start, b.end) }));
-          }
-        }
-        cells.push(cellModel);
+        const runBounds = richTextSegStyles(cell, cellText, defaultFont?.size ?? null);
+        const segments = runBounds
+          ? runBounds
+            .filter((b) => b.end > b.start)
+            .map((b) => (b.style ? { text: cellText.slice(b.start, b.end), ...b.style } : { text: cellText.slice(b.start, b.end) }))
+          : null;
+        entries.push({ cell, cellText, markers, cellModel, segments });
         continue;
       }
 
-      // 有标记 → 替换处理
-      let resolvedText = cellText;
+      // 有标记 → 记录解析件（runBounds 与样式基座均与数据无关，骨架期算好；
+      // 填充期只做取值替换，不再触碰 workbook）
+      const runBounds = richTextSegStyles(cell, cellText, defaultFont?.size ?? null);
+      entries.push({ cell, cellText, markers, runBounds, cellModel: buildCellModel(cell, merges, worksheet, borderCtx, defaultFont) });
+    }
+  }
+
+  return {
+    columnCount,
+    columnWidths,
+    columnWidthUnits,
+    rowHeights,
+    merges,
+    totalWidth,
+    totalHeight,
+    pageSetup,
+    defaultFont,
+    entries,
+    shared,
+  };
+}
+
+/**
+ * 骨架填充：把一页数据装配进模板骨架，返回该页 WorksheetModel。
+ * 与解析分离后多页批量只需一次 ExcelJS 加载；本函数为纯数据装配，
+ * 不触碰 workbook。静态格模型逐页浅拷贝，防止 optimizeImages/transformModel
+ * 钩子改写共享骨架；数组索引映射逐页重置（# 明细行语义与单趟解析一致）
+ *
+ * @param {Object} skeleton - parseTemplateSkeleton 的输出
+ * @param {Object} data - 数据对象
+ * @param {EngineOptions} [option]
+ * @returns {Promise<Object>} WorksheetModel
+ */
+export async function fillSkeleton(skeleton, data, option = {}) {
+  throwIfAborted(option.signal);
+
+  const { entries, shared } = skeleton;
+  const flatData = flattenObject(data);
+  const globalDefaults = option.defaults || {};
+  const effective = resolveEffectivePlugins(option.plugins);
+  const seams = getSeams();
+  const arrayIndexMap = {}; // 记录 #数组.字段 的序号（每页独立）
+  // 图片缓存调用级共享（跨页同一张图只解析一次）；单页调用等价于原函数局部缓存
+  const imageCache = shared.imageCache || (shared.imageCache = new Map());
+
+  const cells = [];
+  for (const entry of entries) {
+    const cell = entry.cell;
+    const cellText = entry.cellText;
+    const markers = entry.markers;
+
+    // 无标记 → 静态格：复用骨架建模（浅拷贝隔离钩子改写），尝试 key 匹配插图（商业版接缝）
+    if (markers.length === 0) {
+      const cellModel = { ...entry.cellModel };
+      let imageMatched = false;
+      if (seams.autoInsertImage) {
+        imageMatched = await seams.autoInsertImage({
+          cell, cellText, cellModel, flatData, columnWidths: skeleton.columnWidths, rowHeights: skeleton.rowHeights, imageCache,
+        });
+      }
+      // 模板富文本局部格式（Excel 单元格内局部加粗/斜体/颜色等）：无样式差异时保持纯文本输出零变化
+      if (!imageMatched && entry.segments) {
+        cellModel.segments = entry.segments.map((s) => ({ ...s }));
+      }
+      cells.push(cellModel);
+      continue;
+    }
+
+    // 有标记 → 替换处理
+    let resolvedText = cellText;
       const images = [];
       const watermarks = [];
       // 模板富文本局部格式 + 同格多标记独立 minsize：text 标记替换值继承所在 run 的局部格式，
@@ -517,7 +591,7 @@ export async function processTemplate(templateSource, data, option = {}) {
       let textMinSize = 0;       // 已配置 minsize 的 text 标记下限最小值（pt）
       let textAllFloored = true; // 全部文本内容是否均有 minsize 下限
       let restText = cellText;   // 原文未消费部分（与标记出现顺序并行，供分段切分）
-      const runBounds = richTextSegStyles(cell, cellText, defaultFont?.size ?? null); // 富文本 run 字位边界 + 样式差异（null = 无局部格式）
+      const runBounds = entry.runBounds; // 富文本 run 字位边界 + 样式差异（骨架期已算，null = 无局部格式）
       let consumed = 0;          // 原文已消费字数（与 restText 并行，供 run 样式定位）
 
       /** 原文指定字位所在 run 的样式差异（供替换文本继承局部格式）；无则 null */
@@ -716,7 +790,7 @@ export async function processTemplate(templateSource, data, option = {}) {
         hasStyledSegment = false;
       }
 
-      const cellModel = buildCellModel(cell, merges, worksheet, borderCtx, defaultFont);
+      const cellModel = { ...entry.cellModel }; // 样式基座骨架期已建模，浅拷贝隔离钩子改写
       cellModel.text = resolvedText;
       cellModel.images = images;
       cellModel.watermarks = watermarks;
@@ -725,25 +799,24 @@ export async function processTemplate(templateSource, data, option = {}) {
       cellModel.minSize = textAllFloored ? textMinSize : 0;
       if (hasStyledSegment) cellModel.segments = segments.filter((s) => s.text !== '');
       cells.push(cellModel);
-    }
   }
 
   // 5. 嵌入图片尺寸归一/压缩：商业版接缝（sharp 缩至显示尺寸 + 格式转换 + DPI 归一）优先；
   // 未注入时核心以纯 JS image-size 兜底归一（@96DPI、不压缩），保证未设宽高的图可见
-  if (seams.optimizeImages) await seams.optimizeImages(cells, columnWidths, rowHeights);
+  if (seams.optimizeImages) await seams.optimizeImages(cells, skeleton.columnWidths, skeleton.rowHeights);
   else await normalizeImageSizes(cells);
 
   let model = {
-    columnCount,
-    columnWidths,
-    columnWidthUnits,
-    rowHeights,
-    merges,
+    columnCount: skeleton.columnCount,
+    columnWidths: skeleton.columnWidths,
+    columnWidthUnits: skeleton.columnWidthUnits,
+    rowHeights: skeleton.rowHeights,
+    merges: skeleton.merges,
     cells,
-    totalWidth,
-    totalHeight,
-    pageSetup,
-    defaultFont,
+    totalWidth: skeleton.totalWidth,
+    totalHeight: skeleton.totalHeight,
+    pageSetup: skeleton.pageSetup,
+    defaultFont: skeleton.defaultFont,
   };
 
   // 6. 模型后处理钩子（transformModel，按注册顺序调用；返回新 model 则替换）
@@ -762,6 +835,21 @@ export async function processTemplate(templateSource, data, option = {}) {
   }
 
   return model;
+}
+
+/**
+ * 核心：处理 Excel 模板，解析并替换标记，返回 WorksheetModel。
+ * 骨架解析 + 数据填充的组合入口（单页路径行为与历史单趟实现一致）；
+ * 多页批量由 buildHtml 拆调 parseTemplateSkeleton/fillSkeleton 复用骨架
+ *
+ * @param {string|Buffer} templateSource - 模板来源（本地路径/URL/Buffer）
+ * @param {Object} data - 数据对象
+ * @param {EngineOptions} [option]
+ * @returns {Promise<Object>} WorksheetModel
+ */
+export async function processTemplate(templateSource, data, option = {}) {
+  const skeleton = await parseTemplateSkeleton(templateSource, option);
+  return fillSkeleton(skeleton, data, option);
 }
 
 /**

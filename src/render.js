@@ -187,6 +187,10 @@ export function renderHtml(model, option = {}) {
         : '';
     const injectScripts = [measureScript, fitScript, watermarkScript].filter(Boolean).join('\n');
 
+    // 多页共用函数源单次注入（商业版接缝）：多页时逐页脚本只保留调用，
+    // 函数源在 head 注入一次挂 window 全局；单页（pageId 为 null）保持逐页内联全量源码
+    const preamble = (seams.scriptPreamble && pageId) ? seams.scriptPreamble() : '';
+
     // 关闭自适应时保留旧的「换行行不限高」行为，保证输出与改动前一致
     const legacyAutoRowCss = fitEnabled ? '' : `
   tr:has(td.pre-wrap) {
@@ -198,7 +202,7 @@ export function renderHtml(model, option = {}) {
 <html>
 <head>
 <meta charset="utf-8">
-<style>
+${preamble ? `<script>\n${preamble}\n</script>\n` : ''}<style>
   @page { size: ${page.widthMm}mm ${page.heightMm}mm; margin: ${margin.top}mm ${margin.right}mm ${margin.bottom}mm ${margin.left}mm; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {

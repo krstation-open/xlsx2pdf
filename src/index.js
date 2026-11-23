@@ -19,10 +19,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { processTemplate } from './engine.js';
+import { parseTemplateSkeleton, fillSkeleton } from './engine.js';
 import { renderHtml, renderTableFragment } from './render.js';
 import { htmlToPdf, closeBrowser } from './pdf.js';
 import { resolvePageSetup, isMeaningfulPageSize } from './pagesetup.js';
+import { getPageDimensions } from './constants.js';
 import { configure, ensureBrowser, getConfig, pkgRoot, validateMaxConcurrency, warnConcurrencyRisk } from './browser.js';
 import { getSeams, hasCapability } from './seams.js';
 import { use } from './registry.js';
@@ -35,6 +36,9 @@ import { Xlsx2pdfError, xlsxError, throwIfAborted } from './errors.js';
 const PRO_CONTACT = '商业版咨询：business@krstation.com';
 /** 英文报错中的同义咨询入口（邮箱与中文一致） */
 const PRO_CONTACT_EN = 'Pro inquiries: business@krstation.com';
+
+/** 分批出片默认批大小：页数超过此值时分批渲染再合并（option.batchSize 可覆盖） */
+const DEFAULT_BATCH_SIZE = 10;
 
 /**
  * 商业版 Pro 专属 option 键：能力未注册时传入任一项即显式报错引导（不静默忽略）。
@@ -50,6 +54,7 @@ const PRO_OPTION_KEYS = {
   maxTemplateSize: ['resourceGuards', '模板体积上限参数化'],
   memoryGuard: ['resourceGuards', '内存准入守卫'],
   emptyRowPlaceholders: ['emptyRowPlaceholders', '空行占位字符（自适应配套）'],
+  batchSize: ['arrayData', '分批出片（页数多时分批渲染再合并）'],
 };
 
 /**
@@ -97,6 +102,13 @@ function validateParams({ template, data, option = {} }) {
   // 调用级并发上限（1.4.0 起社区版开放）：只接受正整数，两个生成 API 同一校验；
   // 生效链路在 excel2pdf（excel2html 不启动浏览器，仅校验不消费）
   if (option.maxConcurrency !== undefined) validateMaxConcurrency(option.maxConcurrency, 'option');
+
+  // 分批出片批大小：只接受正整数；页数超过此值时分批渲染再合并（能力闸门由 PRO_OPTION_KEYS 统一把守）
+  if (option.batchSize !== undefined && (!Number.isInteger(option.batchSize) || option.batchSize < 1)) {
+    throw xlsxError('E_OPTION_INVALID',
+      `[xlsx2pdf] option.batchSize 只接受正整数，收到：${JSON.stringify(option.batchSize)}`,
+      `option.batchSize accepts positive integers only, received: ${JSON.stringify(option.batchSize)}.`);
+  }
 
   // 取消信号（1.5.0 起）：只接受 AbortSignal，两个生成 API 同口径
   if (option.signal !== undefined && !(option.signal instanceof AbortSignal)) {
@@ -147,6 +159,10 @@ export function getVersion() {
 /**
  * 公共生成链路：模板 → 逐页 model → 单份 HTML 字符串（不启动浏览器）
  *
+ * 骨架只解析一遍 + 逐页数据填充：模板读取/守卫/ExcelJS 加载/几何/静态格建模
+ * 均与数据无关，多页批量复用同一骨架（shared 上下文承载 buffer/预检/字体/
+ * 页面设置/图片缓存），避免同一份模板被重复解析 N 次
+ *
  * @param {Object} params
  * @param {string|Buffer} params.template - Excel 模板路径/URL/Buffer
  * @param {Object|Object[]} [params.data] - 数据对象（支持嵌套点路径取值）；数组多页需商业版
@@ -162,85 +178,89 @@ async function buildHtml({ template, data, option = {} }) {
   // 降级告警收集：逐次生成独立数组，经 markerCtx.warnings 透传给内置/插件 handler
   const warnings = [];
 
-  // data 缺省或空数组时兑底为 [{}]，渲染一页空模板
+  // data 缺省或空数组时兜底为 [{}]，渲染一页空模板
   const dataItems = Array.isArray(data)
     ? (data.length > 0 ? data : [{}])
     : (data ? [data] : [{}]);
+
+  const engineOpts = {
+    defaults: option.defaults,
+    plugins: option.plugins,
+    // 标记语法：调用级 option.markerRegex > 全局 configure({ markerRegex }) > 内置 ${...}
+    markerRegex: option.markerRegex ?? getConfig().markerRegex,
+    // 标记内部分隔符：调用级 > 全局 > 内置 |
+    markerSeparator: option.markerSeparator ?? getConfig().markerSeparator,
+    // 模板规模守卫：调用级 > 全局 > 内置默认（见 browser.js config）
+    maxCells: option.maxCells ?? getConfig().maxCells,
+    maxTemplateSize: option.maxTemplateSize ?? getConfig().maxTemplateSize,
+    warnings,
+    signal: option.signal,
+    shared: {},
+  };
+  const skeleton = await parseTemplateSkeleton(template, engineOpts);
 
   const pages = [];
   for (const item of dataItems) {
     // 逐页取消检查：多页批量中途 abort 不再继续后续页
     throwIfAborted(option.signal);
-    const model = await processTemplate(template, item, {
-      defaults: option.defaults,
-      plugins: option.plugins,
-      // 标记语法：调用级 option.markerRegex > 全局 configure({ markerRegex }) > 内置 ${...}
-      markerRegex: option.markerRegex ?? getConfig().markerRegex,
-      // 标记内部分隔符：调用级 > 全局 > 内置 |
-      markerSeparator: option.markerSeparator ?? getConfig().markerSeparator,
-      // 模板规模守卫：调用级 > 全局 > 内置默认（见 browser.js config）
-      maxCells: option.maxCells ?? getConfig().maxCells,
-      maxTemplateSize: option.maxTemplateSize ?? getConfig().maxTemplateSize,
-      warnings,
-      signal: option.signal,
-    });
+    const model = await fillSkeleton(skeleton, item, engineOpts);
 
     // 页面设置统一解析：用户 > 模板 pageSetup > Excel 内建默认（见 pagesetup.js）
     const setup = resolvePageSetup(model, option);
     pages.push({ model, ...setup });
   }
 
-  let html;
+  return { html: assembleHtml(pages, option), pages, warnings };
+}
+
+/**
+ * 把一组页面拼装为完整 HTML 文档（单页走 renderHtml；多页逐页 fragment +
+ * page-break-before 分隔，纸张参数取组内首页）。全量文档与分批出片共用，
+ * 保证同一页面集合两条路径产出一致
+ *
+ * @param {Array} pages - buildHtml 的逐页解析结果（model + 页面设置）
+ * @param {Object} option - 用户原始 option（取 scale 与渲染行为类参数）
+ * @returns {string} HTML 字符串
+ */
+function assembleHtml(pages, option) {
+  // 仅含渲染行为类参数；页面设置类逐页从解析结果取（多页可各自不同）
+  const renderOpts = {
+    fitToPage: option.fitToPage,
+    minFontSize: option.minFontSize,
+    emptyRowPlaceholders: option.emptyRowPlaceholders,
+  };
+
   if (pages.length === 1) {
     const p = pages[0];
-    html = renderHtml(p.model, {
+    return renderHtml(p.model, {
       pageSize: p.pageSize,
       orientation: p.orientation,
       margin: p.margin,
       // scale 传用户原始值：renderHtml 内部会再走一次 resolvePageSetup，
       // 若传已解析的小数比例会被百分数换算二次除 100（100% → 1 → 0.01）
       scale: option.scale,
-      fitToPage: option.fitToPage,
-      minFontSize: option.minFontSize,
-      emptyRowPlaceholders: option.emptyRowPlaceholders,
-    });
-  } else {
-    const first = pages[0];
-    // 仅含渲染行为类参数；页面设置类逐页从解析结果取（多页可各自不同）
-    const renderOpts = {
-      fitToPage: option.fitToPage,
-      minFontSize: option.minFontSize,
-      emptyRowPlaceholders: option.emptyRowPlaceholders,
-    };
-
-    const fragments = [];
-    for (let i = 0; i < pages.length; i++) {
-      const p = pages[i];
-      const pageId = `p${i}`;
-      const pageOpts = { ...renderOpts, scale: option.scale, pageSize: p.pageSize, orientation: p.orientation, margin: p.margin, pageId };
-      if (i === 0) {
-        const fullHtml = renderHtml(p.model, pageOpts);
-        const bodyMatch = fullHtml.match(/<body>([\s\S]*)<\/body>/);
-        fragments.push(bodyMatch ? bodyMatch[1] : fullHtml);
-      } else {
-        fragments.push(`<div style="page-break-before: always;"></div>${renderTableFragment(p.model, pageOpts)}`);
-      }
-    }
-
-    const headHtml = renderHtml(first.model, {
-      scale: option.scale,
-      pageSize: first.pageSize,
-      orientation: first.orientation,
-      margin: first.margin,
       ...renderOpts,
-      pageId: 'p0',
     });
-    const headMatch = headHtml.match(/([\s\S]*<body>)/);
-    const head = headMatch ? headMatch[1] : '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>';
-    html = `${head}\n${fragments.join('\n')}\n</body>\n</html>`;
   }
 
-  return { html, pages, warnings };
+  const fragments = [];
+  let head = '';
+  for (let i = 0; i < pages.length; i++) {
+    const p = pages[i];
+    const pageId = `p${i}`;
+    const pageOpts = { ...renderOpts, scale: option.scale, pageSize: p.pageSize, orientation: p.orientation, margin: p.margin, pageId };
+    if (i === 0) {
+      const fullHtml = renderHtml(p.model, pageOpts);
+      const bodyMatch = fullHtml.match(/<body>([\s\S]*)<\/body>/);
+      fragments.push(bodyMatch ? bodyMatch[1] : fullHtml);
+      // 复用同一次渲染结果提取 head，避免第 0 页二次全量渲染
+      const headMatch = fullHtml.match(/([\s\S]*<body>)/);
+      head = headMatch ? headMatch[1] : '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>';
+    } else {
+      fragments.push(`<div style="page-break-before: always;"></div>${renderTableFragment(p.model, pageOpts)}`);
+    }
+  }
+  return `${head}\n${fragments.join('\n')}\n</body>\n</html>`;
 }
 
 /**
@@ -254,6 +274,8 @@ async function buildHtml({ template, data, option = {} }) {
  * @param {string} [params.option.orientation] - portrait / landscape
  * @param {Object} [params.option.margin] - 页边距 mm { top, right, bottom, left }，逐字段合并，
  *   模板未设时兜底为 Excel 内建默认（上下 19.1 / 左右 17.8mm）
+ * @param {number} [params.option.batchSize] - 分批出片批大小（Pro，默认 10）：页数超过此值时
+ *   分批独立标签页渲染再经接缝合并，批间并发受 maxConcurrency/内存准入天然限流
  * @param {Object} [params.option.defaults] - 全局默认值 { 字段名: '默认值' }
  * @param {AbortSignal} [params.option.signal] - 取消信号：排队中摘除、渲染中关闭标签页中断，抛 E_CANCELLED
  * @returns {Promise<{ pdf: Buffer, html: string, warnings: string[] }>} warnings 为降级告警（无降级时为空数组）
@@ -284,21 +306,56 @@ export async function excel2pdf({ template, data, option = {} }) {
       `option.fontGuard accepts ${fontGuardModes.join(' / ')} only, received: ${JSON.stringify(option.fontGuard)}.`);
   }
 
-  const firstPage = pages[0];
-  const rendered = await htmlToPdf(html, {
-    pageSize: firstPage.pageSize,
-    orientation: firstPage.orientation,
-    margin: firstPage.margin,
-    fontGuard,
-    maxConcurrency: option.maxConcurrency,
-    signal: option.signal,
-  });
-  let pdf = rendered.buffer;
-  warnings.push(...rendered.warnings);
+  // 分批出片：页数超过 batchSize 时按批拆分，每批独立标签页出片（纸张取批内首页，
+  // 顺带支持跨批混合纸张/方向），批间并发由标签页信号量与内存准入天然限流，
+  // 产物经商业版接缝按序合并。≤ batchSize 保持单文档路径，产物字节不变
+  const batchSize = option.batchSize ?? DEFAULT_BATCH_SIZE;
+  let pdf;
+  if (pages.length > batchSize && seams.mergePdf) {
+    const batches = [];
+    for (let i = 0; i < pages.length; i += batchSize) batches.push(pages.slice(i, i + batchSize));
+    const batchWarnings = new Array(batches.length);
+    const buffers = await Promise.all(batches.map(async (batch, bi) => {
+      // 逐批取消检查：abort 后未启动的批不再进入渲染（在途批由 htmlToPdf 内部竞态中断）
+      throwIfAborted(option.signal);
+      const first = batch[0];
+      const rendered = await htmlToPdf(assembleHtml(batch, option), {
+        pageSize: first.pageSize,
+        orientation: first.orientation,
+        margin: first.margin,
+        fontGuard,
+        maxConcurrency: option.maxConcurrency,
+        signal: option.signal,
+      });
+      batchWarnings[bi] = rendered.warnings;
+      return rendered.buffer;
+    }));
+    // 告警按批序聚合（Promise.all 完成序不确定，不直接 push 避免告警顺序漂移）
+    for (const w of batchWarnings) warnings.push(...(w || []));
+    pdf = buffers.length === 1 ? buffers[0] : await seams.mergePdf(buffers);
+  } else {
+    const firstPage = pages[0];
+    const rendered = await htmlToPdf(html, {
+      pageSize: firstPage.pageSize,
+      orientation: firstPage.orientation,
+      margin: firstPage.margin,
+      fontGuard,
+      maxConcurrency: option.maxConcurrency,
+      signal: option.signal,
+    });
+    pdf = rendered.buffer;
+    warnings.push(...rendered.warnings);
+  }
 
   // 横向标记补写（商业版接缝）：Chromium 只用「交换 MediaBox 宽高」表达横向且绝不写 /Rotate，
-  // WPS 打印模块 / Clodop 按 /Rotate 选纸会退回纵向纸。纵向页由实现按几何自行判定并原样返回
-  if (pageRotate && seams.rotateLandscape) pdf = await seams.rotateLandscape(pdf);
+  // WPS 打印模块 / Clodop 按 /Rotate 选纸会退回纵向纸。
+  // 全页几何纵向时跳过（改写函数对纵向页本就原样返回，省一次 pdf-lib 全量解析）；
+  // 按解析后几何判定而非 orientation 字符串：自定义纸张宽>高时 portrait 也是几何横向
+  const hasLandscapeGeometry = pages.some((p) => {
+    const d = getPageDimensions(p.pageSize, p.orientation);
+    return d.widthMm > d.heightMm;
+  });
+  if (pageRotate && seams.rotateLandscape && hasLandscapeGeometry) pdf = await seams.rotateLandscape(pdf);
 
   return { pdf, html, warnings };
 }
