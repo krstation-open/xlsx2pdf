@@ -28,7 +28,7 @@ fs.mkdirSync(outDir, { recursive: true });
 const wb = new ExcelJS.Workbook();
 const ws = wb.addWorksheet('Big');
 for (let r = 1; r <= 100; r++) {
-  for (let c = 1; c <= 150; c++) ws.getCell(r, c).value = `值${r}-${c}`;
+    for (let c = 1; c <= 150; c++) ws.getCell(r, c).value = `值${r}-${c}`;
 }
 const tplBig = path.join(outDir, 'tpl-cancel-big.xlsx');
 await wb.xlsx.writeFile(tplBig);
@@ -42,7 +42,7 @@ await wbS.xlsx.writeFile(tplSmall);
 // 占槽闸门：经 fontGuardCheck 接缝让任务 A 在渲染槽内（setContent 之后、出片之前）
 // 确定性挂起。不依赖渲染耗时猜测，也不依赖远程资源（图片下载在 buildHtml 阶段，占不住渲染槽）
 let gateEntered = false;
-let releaseGate = () => {};
+let releaseGate = () => { };
 const gate = new Promise((r) => { releaseGate = r; });
 // 注：接缝在 ③ 段内才注册，避免 ② 的无 signal 恢复任务被闸门挂死
 
@@ -50,111 +50,111 @@ const hasBrowser = fs.existsSync(await builtinExecutablePath()) || !!process.env
 
 /** 断言 Promise 以 E_CANCELLED 拒绝 */
 async function expectCancelled(label, promise) {
-  let err;
-  try {
-    await promise;
-  } catch (e) {
-    err = e;
-  }
-  assert.ok(err instanceof Xlsx2pdfError && err.code === 'E_CANCELLED',
-    `${label}: 应抛 E_CANCELLED，实际 ${err && err.code}`);
-  console.log(`  ✓ ${label}`);
+    let err;
+    try {
+        await promise;
+    } catch (e) {
+        err = e;
+    }
+    assert.ok(err instanceof Xlsx2pdfError && err.code === 'E_CANCELLED',
+        `${label}: 应抛 E_CANCELLED，实际 ${err && err.code}`);
+    console.log(`  ✓ ${label}`);
 }
 
 try {
-  console.log('[cancel-guard] option.signal 取消契约');
+    console.log('[cancel-guard] option.signal 取消契约');
 
-  // ① 预 abort：不启动浏览器即失败（无浏览器环境也可断言）
-  const ac0 = new AbortController();
-  ac0.abort();
-  await expectCancelled('预 abort 快速失败',
-    excel2pdf({ template: tplSmall, option: { signal: ac0.signal } }));
+    // ① 预 abort：不启动浏览器即失败（无浏览器环境也可断言）
+    const ac0 = new AbortController();
+    ac0.abort();
+    await expectCancelled('预 abort 快速失败',
+        excel2pdf({ template: tplSmall, option: { signal: ac0.signal } }));
 
-  if (!hasBrowser) {
-    console.log('  ⚠ 跳过渲染中/排队中行为断言：当前环境无可用浏览器');
-    console.log('[cancel-guard] 通过（部分跳过）✅');
-  } else {
-    // ② 渲染中 abort：大模板渲染窗口内取消 → E_CANCELLED
-    const ac1 = new AbortController();
-    const p1 = excel2pdf({ template: tplBig, option: { signal: ac1.signal } });
-    setTimeout(() => ac1.abort(), 200);
-    await expectCancelled('渲染中 abort → E_CANCELLED', p1);
+    if (!hasBrowser) {
+        console.log('  ⚠ 跳过渲染中/排队中行为断言：当前环境无可用浏览器');
+        console.log('[cancel-guard] 通过（部分跳过）✅');
+    } else {
+        // ② 渲染中 abort：大模板渲染窗口内取消 → E_CANCELLED
+        const ac1 = new AbortController();
+        const p1 = excel2pdf({ template: tplBig, option: { signal: ac1.signal } });
+        setTimeout(() => ac1.abort(), 200);
+        await expectCancelled('渲染中 abort → E_CANCELLED', p1);
 
-    // 取消后浏览器单例保留复用：后续任务正常出片
-    const after = await excel2pdf({ template: tplSmall, data: { name: 'ok' } });
-    assert.ok(after.pdf.subarray(0, 5).toString() === '%PDF-', '取消后后续任务应正常出片');
-    console.log('  ✓ 取消后浏览器复用不破坏，后续任务正常');
+        // 取消后浏览器单例保留复用：后续任务正常出片
+        const after = await excel2pdf({ template: tplSmall, data: { name: 'ok' } });
+        assert.ok(after.pdf.subarray(0, 5).toString() === '%PDF-', '取消后后续任务应正常出片');
+        console.log('  ✓ 取消后浏览器复用不破坏，后续任务正常');
 
-    // ③ 排队中 abort：限流 1，任务 A 经闸门接缝确定性占槽，B 真正入队后取消 → 摘除不占槽
-    // 注：configure 必须先于 A 发起（acquireSlot 读的是发起时的全局配置）
-    configure({ maxConcurrency: 1 });
-    registerSeams({ fontGuardCheck: async () => { gateEntered = true; await gate; } });
-    const br = await getBrowser();
-    // Chrome 启动自带一个空白页（非任务开）：标签页计数一律相对基线断言
-    const basePages = (await br.pages()).length;
-    const pA = excel2pdf({ template: tplSmall, data: { name: 'a' } });
-    pA.catch(() => { /* 失败路径防未处理拒绝（正常路径下方仍会 await） */ });
+        // ③ 排队中 abort：限流 1，任务 A 经闸门接缝确定性占槽，B 真正入队后取消 → 摘除不占槽
+        // 注：configure 必须先于 A 发起（acquireSlot 读的是发起时的全局配置）
+        configure({ maxConcurrency: 1 });
+        registerSeams({ fontGuardCheck: async () => { gateEntered = true; await gate; } });
+        const br = await getBrowser();
+        // Chrome 启动自带一个空白页（非任务开）：标签页计数一律相对基线断言
+        const basePages = (await br.pages()).length;
+        const pA = excel2pdf({ template: tplSmall, data: { name: 'a' } });
+        pA.catch(() => { /* 失败路径防未处理拒绝（正常路径下方仍会 await） */ });
 
-    // 等 A 拿槽并进入闸门（此时 A 已持有渲染槽位）
-    let rendering = false;
-    for (let i = 0; i < 100; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      if (gateEntered) { rendering = true; break; }
+        // 等 A 拿槽并进入闸门（此时 A 已持有渲染槽位）
+        let rendering = false;
+        for (let i = 0; i < 100; i++) {
+            await new Promise((r) => setTimeout(r, 50));
+            if (gateEntered) { rendering = true; break; }
+        }
+        assert.ok(rendering, 'A 应已拿槽并进入占槽闸门');
+        assert.strictEqual((await br.pages()).length, basePages + 1, 'A 占槽应只新开一个标签页');
+
+        const acB = new AbortController();
+        const pB = excel2pdf({ template: tplSmall, data: { name: 'b' }, option: { signal: acB.signal } });
+        pB.catch(() => { /* 同上 */ });
+        await new Promise((r) => setTimeout(r, 500)); // 小模板 buildHtml 极快，B 此时必已入队
+        assert.strictEqual((await br.pages()).length, basePages + 1, 'B 排队期间不应新开标签页');
+
+        acB.abort();
+        await expectCancelled('排队中 abort → 摘除 + E_CANCELLED', pB);
+
+        // 摘除后标签页数不变（B 未占槽）；放行闸门让 A 出片；随后 C 能拿槽
+        assert.strictEqual((await br.pages()).length, basePages + 1, 'B 摘除后不应残留标签页');
+        releaseGate();
+        const resA = await pA;
+        assert.ok(resA.pdf.subarray(0, 5).toString() === '%PDF-', '占槽任务 A 不受 B 取消影响');
+        const resC = await excel2pdf({ template: tplSmall, data: { name: 'c' } });
+        assert.ok(resC.pdf.subarray(0, 5).toString() === '%PDF-', 'B 摘除后 C 应正常拿槽出片');
+        console.log('  ✓ 排队摘除不占槽：A 不受影响，C 正常拿槽');
+
+        // ④ 循环 abort 压力（1.6.2）：10 轮「新闸门占槽 → 排队任务取消 → 放行出片」，
+        // 每轮末标签页回基线——验证反复取消后队列/槽位/标签页无残留、无死锁
+        for (let round = 1; round <= 10; round++) {
+            let entered = false;
+            let open = () => { };
+            const g = new Promise((r) => { open = r; });
+            releaseGate = open; // finally 兼顾失败路径：始终放行最新一轮闸门
+            registerSeams({ fontGuardCheck: async () => { entered = true; await g; } });
+            const pHold = excel2pdf({ template: tplSmall, data: { name: `h${round}` } });
+            pHold.catch(() => { /* 失败路径防未处理拒绝 */ });
+            for (let i = 0; i < 100 && !entered; i++) await new Promise((r) => setTimeout(r, 20));
+            assert.ok(entered, `第 ${round} 轮：占槽任务应进入闸门`);
+            const acQ = new AbortController();
+            const pQ = excel2pdf({ template: tplSmall, data: { name: `q${round}` }, option: { signal: acQ.signal } });
+            pQ.catch(() => { /* 同上 */ });
+            await new Promise((r) => setTimeout(r, 100)); // 小模板 buildHtml 极快，此时必已入队
+            acQ.abort();
+            await expectCancelled(`第 ${round} 轮排队 abort`, pQ);
+            open();
+            const resH = await pHold;
+            assert.ok(resH.pdf.subarray(0, 5).toString() === '%PDF-', `第 ${round} 轮：占槽任务正常出片`);
+            assert.strictEqual((await br.pages()).length, basePages, `第 ${round} 轮：标签页应回基线`);
+        }
+        console.log('  ✓ ④ 循环 abort 压力 10 轮：队列/槽位/标签页无残留');
+
+        configure({ maxConcurrency: 1 }); // 复位（与默认一致，显式声明意图）
+        console.log('[cancel-guard] 全部通过 ✅');
     }
-    assert.ok(rendering, 'A 应已拿槽并进入占槽闸门');
-    assert.strictEqual((await br.pages()).length, basePages + 1, 'A 占槽应只新开一个标签页');
-
-    const acB = new AbortController();
-    const pB = excel2pdf({ template: tplSmall, data: { name: 'b' }, option: { signal: acB.signal } });
-    pB.catch(() => { /* 同上 */ });
-    await new Promise((r) => setTimeout(r, 500)); // 小模板 buildHtml 极快，B 此时必已入队
-    assert.strictEqual((await br.pages()).length, basePages + 1, 'B 排队期间不应新开标签页');
-
-    acB.abort();
-    await expectCancelled('排队中 abort → 摘除 + E_CANCELLED', pB);
-
-    // 摘除后标签页数不变（B 未占槽）；放行闸门让 A 出片；随后 C 能拿槽
-    assert.strictEqual((await br.pages()).length, basePages + 1, 'B 摘除后不应残留标签页');
-    releaseGate();
-    const resA = await pA;
-    assert.ok(resA.pdf.subarray(0, 5).toString() === '%PDF-', '占槽任务 A 不受 B 取消影响');
-    const resC = await excel2pdf({ template: tplSmall, data: { name: 'c' } });
-    assert.ok(resC.pdf.subarray(0, 5).toString() === '%PDF-', 'B 摘除后 C 应正常拿槽出片');
-    console.log('  ✓ 排队摘除不占槽：A 不受影响，C 正常拿槽');
-
-    // ④ 循环 abort 压力（1.6.2）：10 轮「新闸门占槽 → 排队任务取消 → 放行出片」，
-    // 每轮末标签页回基线——验证反复取消后队列/槽位/标签页无残留、无死锁
-    for (let round = 1; round <= 10; round++) {
-      let entered = false;
-      let open = () => {};
-      const g = new Promise((r) => { open = r; });
-      releaseGate = open; // finally 兼顾失败路径：始终放行最新一轮闸门
-      registerSeams({ fontGuardCheck: async () => { entered = true; await g; } });
-      const pHold = excel2pdf({ template: tplSmall, data: { name: `h${round}` } });
-      pHold.catch(() => { /* 失败路径防未处理拒绝 */ });
-      for (let i = 0; i < 100 && !entered; i++) await new Promise((r) => setTimeout(r, 20));
-      assert.ok(entered, `第 ${round} 轮：占槽任务应进入闸门`);
-      const acQ = new AbortController();
-      const pQ = excel2pdf({ template: tplSmall, data: { name: `q${round}` }, option: { signal: acQ.signal } });
-      pQ.catch(() => { /* 同上 */ });
-      await new Promise((r) => setTimeout(r, 100)); // 小模板 buildHtml 极快，此时必已入队
-      acQ.abort();
-      await expectCancelled(`第 ${round} 轮排队 abort`, pQ);
-      open();
-      const resH = await pHold;
-      assert.ok(resH.pdf.subarray(0, 5).toString() === '%PDF-', `第 ${round} 轮：占槽任务正常出片`);
-      assert.strictEqual((await br.pages()).length, basePages, `第 ${round} 轮：标签页应回基线`);
-    }
-    console.log('  ✓ ④ 循环 abort 压力 10 轮：队列/槽位/标签页无残留');
-
-    configure({ maxConcurrency: 1 }); // 复位（与默认一致，显式声明意图）
-    console.log('[cancel-guard] 全部通过 ✅');
-  }
 } catch (err) {
-  console.error('[cancel-guard] 失败 ❌', err);
-  process.exitCode = 1;
+    console.error('[cancel-guard] 失败 ❌', err);
+    process.exitCode = 1;
 } finally {
-  releaseGate(); // 失败路径也放行闸门，避免 A 挂死导致 closeBrowser 卡住
-  registerSeams({ fontGuardCheck: null }); // 复位接缝，不污染同进程后续用例
-  await closeBrowser();
+    releaseGate(); // 失败路径也放行闸门，避免 A 挂死导致 closeBrowser 卡住
+    registerSeams({ fontGuardCheck: null }); // 复位接缝，不污染同进程后续用例
+    await closeBrowser();
 }

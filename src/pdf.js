@@ -227,7 +227,7 @@ export async function htmlToPdf(html, option = {}) {
   // 不占用并发槽位；与 maxConcurrency 信号量取“与”合流（守卫实现由商业版接缝注入，缺省直接放行）
   // 注：memoryAdmit 排队轮询不感知 signal（其 maxWaitMs 自带超时兜底），放行后的预检会拦截已取消请求
   const seams = getSeams();
-  const releaseMemory = seams.memoryAdmit ? await seams.memoryAdmit(getConfig().memoryGuard) : () => {};
+  const releaseMemory = seams.memoryAdmit ? await seams.memoryAdmit(getConfig().memoryGuard) : () => { };
 
   let slotAcquired = false;
   let pg = null;

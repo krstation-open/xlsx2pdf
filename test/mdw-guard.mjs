@@ -66,8 +66,8 @@ const bufPlain = Buffer.from(await wb.xlsx.writeBuffer());
 const zip = await JSZip.loadAsync(bufPlain);
 const styles = await zip.file('xl/styles.xml').async('string');
 const patched = styles.replace(
-  /(<fonts[^>]*>\s*)<font>[\s\S]*?<\/font>/,
-  '$1<font><sz val="11"/><name val="宋体"/></font>',
+    /(<fonts[^>]*>\s*)<font>[\s\S]*?<\/font>/,
+    '$1<font><sz val="11"/><name val="宋体"/></font>',
 );
 assert.notStrictEqual(patched, styles, '夹具应成功改写默认字体');
 zip.file('xl/styles.xml', patched);
