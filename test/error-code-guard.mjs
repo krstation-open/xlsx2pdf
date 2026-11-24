@@ -45,11 +45,17 @@ ws.getCell('A1').value = '${name}';
 const tpl = path.join(outDir, 'tpl-err.xlsx');
 await wb.xlsx.writeFile(tpl);
 
-// watermark 标记模板（Pro 标记引导）
+// watermark 标记模板（1.7.0 起社区版内置；别名禁用场景复用）
 const wbWm = new ExcelJS.Workbook();
 wbWm.addWorksheet('Wm').getCell('A1').value = '${t|watermark}';
 const tplWm = path.join(outDir, 'tpl-err-watermark.xlsx');
 await wbWm.xlsx.writeFile(tplWm);
+
+// print 历史别名模板（1.7.0 起随 watermark 内置社区版；别名禁用后未注册须显式报错）
+const wbPrint = new ExcelJS.Workbook();
+wbPrint.addWorksheet('Print').getCell('A1').value = '${t|print_minsize17}';
+const tplPrint = path.join(outDir, 'tpl-err-print.xlsx');
+await wbPrint.xlsx.writeFile(tplPrint);
 
 // 自定义纸张模板（代码 256，尺寸在打印机驱动内）与不支持代码模板（200）
 const wbCustom = new ExcelJS.Workbook();
@@ -128,10 +134,22 @@ try {
     () => excel2html({ template: tpl, option: { markerSeparator: '' } }),
     'E_MARKER_SEPARATOR', '非空字符串', 'non-empty string');
 
-  const proErr3 = await expectCode('watermark 标记（Pro 引导）',
-    () => excel2html({ template: tplWm }),
-    'E_MARKER_PRO', '商业版 Pro 能力', 'Pro capability');
-  assert.match(proErr3.message, /business@krstation\.com/, '咨询邮箱保留');
+  // watermark/print 已下放社区版内置（1.7.0）：正常产浮层，不再 Pro 引导
+  const wmHtml = await excel2html({ template: tplWm, data: { t: '作废' } });
+  assert.ok(wmHtml.html.includes('watermark-wrapper'), 'watermark 标记社区版浮层');
+  const printHtml = await excel2html({ template: tplPrint, data: { t: '作废' } });
+  assert.ok(printHtml.html.includes('watermark-wrapper'), 'print 历史别名社区版浮层');
+  console.log('  ✓ watermark/print 社区版内置（1.7.0 下放）');
+
+  // 别名禁用且未注册专属类型：显式报错引导（不静默降级文本，internal.2 历史缺陷保护）
+  configure({ markerAliases: {} });
+  try {
+    await expectCode('print 别名禁用且未注册',
+      () => excel2html({ template: tplPrint, data: { t: '作废' } }),
+      'E_MARKER_ALIAS', '内置别名已禁用', 'is disabled (markerAliases)');
+  } finally {
+    configure({ markerAliases: null }); // 恢复内置默认，避免影响后续用例
+  }
 
   // ============ 4. 规模护栏类 ============
   await expectCode('模板体积超限',

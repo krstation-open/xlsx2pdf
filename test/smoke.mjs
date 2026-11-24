@@ -79,7 +79,11 @@ try {
   // ============ 2. Pro 能力显式引导（不静默降级） ============
   await expectPro(() => excel2html({ template: tpl.basic, data: [DATA] }), 'data 数组批量');
   await expectPro(() => excel2html({ template: tpl.basic, data: DATA, option: { fitToPage: true } }), 'option.fitToPage');
-  await expectPro(() => excel2html({ template: tpl.basic, data: DATA, option: { scale: 80 } }), 'option.scale');
+  // option.scale 已下放社区版（1.7.0）：合法值生效，容错契约见 scale-guard
+  const scaled = await excel2html({ template: tpl.basic, data: DATA, option: { scale: 80 } });
+  assert.ok(scaled.html.includes('张三'), 'scale 社区版合法值生成');
+  assert.ok(scaled.html !== html, 'scale=80 产物应与默认 auto 不同');
+  console.log('  ✓ option.scale 社区版内置');
   await expectPro(() => excel2html({ template: tpl.basic, data: DATA, option: { pageSize: { width: 80, height: 200 } } }), '对象型 pageSize');
   // image 标记已下放社区版：正常嵌入而非 Pro 引导
   const media = await excel2html({ template: tpl.proMarker, data: { photo: PNG } });

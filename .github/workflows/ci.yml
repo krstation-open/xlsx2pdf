@@ -83,3 +83,9 @@ jobs:
 
       - name: MDW guard
         run: npm run test:mdw
+
+      - name: Boundary guards (1.7.0)
+        run: npm run test:boundary
+
+      - name: Batch seam guard
+        run: npm run test:batch
