@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+## [1.7.0] - Unreleased
+
+### Added
+
+- Built-in `watermark` text-watermark marker (`print` is a legacy alias): overlay params `zindex` / `opacity` shared with images, width follows the cell and font size inherits the cell; empty values clear the marker, numFmt inheritance applies. Watermarks auto-fitting font size and wrapping to the layout remain a Pro capability.
+- Precise scaling via `option.scale` (1~400%, capped at 400 to match Excel's print-scaling limit): 100 is synonymous with `'auto'`, non-positive / non-numeric values fall back to auto without throwing; a scale set in the template's page setup already applied and keeps working. `scale` values above 1 no longer trigger the out-of-bounds width fallback.
+- `option.emptyRowPlaceholders` (array of strings, default `[]`): rows made entirely of the given placeholders (e.g. `--`) are treated as empty rows with row heights preserved. Adaptive-shrink interplay remains Pro.
+- Browser lifecycle configure keys: `browserIdleMs` (idle auto-reclaim), `browserRecycleRenders` (render-count recycling at safe points), `browserMaxAgeMs` (wall-clock age rotation at safe points), `protocolTimeoutMs` (CDP call hang ceiling, integer ms ≥1000). Recycling / rotation never interrupt an in-flight generation.
+- `configure({ onEvent })` render event hook: 8 stage events (`html` / `render.wait` / `render.chrome` / `render.print` / `render` / `merge` / `rotate` / `done`) with timing and size fields, ready to bridge into pino or any logger (zero new dependencies). A throwing hook never breaks generation; when unconfigured there is zero overhead (no event object constructed). Coexists with the Pro observe sink.
+- Size-guard parameterization: `maxCells` / `maxTemplateSize` accepted via both option and configure (numbers only, 0/negative disables the guard); the well-meaning defaults of 20000 cells / 5MB are unchanged. Relaxing above the defaults without Pro guards triggers a one-time bilingual runtime warning — see the new Deployment risk note.
+- Configurable marker type aliases (`markerAliases`, option & configure): whole-object replacement semantics, `null` restores the built-in `img`→`image` / `print`→`watermark`, `{}` clears all aliases. A disabled built-in alias token with no registered dedicated type now throws the new stable error code `E_MARKER_ALIAS` instead of silently rendering as text; other unknown type names keep the text fallback. A plugin registering an alias-named type takes over that alias slot silently. `helpers.parseMarkerOption` accepts an optional third `aliases` argument.
+- Seven new boundary guards (scale / lifecycle / empty-row / onEvent / watermark / size-params / aliases) and a `npm run test:boundary` script.
+
+### Changed
+
+- **Default behavior change — idle browser reclaim**: the browser singleton now closes automatically after 60s idle (`browserIdleMs` defaults to 60000) and the next call rebuilds it; the cost is one cold start, with the same semantics as a manual `closeBrowser()`. Previously the singleton stayed resident until `closeBrowser()` or process exit. To keep the old resident behavior, set `configure({ browserIdleMs: 0 })`.
+- Community/Pro boundary: precise scaling, the basic watermark form, empty-row placeholder recognition, size-guard parameterization and browser lifecycle configuration move into the community edition. Pro keeps watermark layout auto-fit, single-page adaptive layout, automatic image compression + DPI-aware sizing, `autoInsertImage`, array batch / `batchSize`, pixel-accurate column width + font-missing guard, custom paper, landscape print-control adaptation, memory admission and `maxPages`.
+- option / configure gate cleanup: the keys released in this version are removed from the Pro-only guidance lists (remaining Pro option keys: `fitToPage` / `minFontSize` / `pageRotate` / `fontGuard` / `memoryGuard` / `maxPages` / `batchSize`); configure now accepts fourteen community keys and keeps silently ignoring undeclared guardrail keys. Internal gating lists were trimmed to the keys actually declared — no behavior change for valid inputs.
+- README (EN/zh-CN), nine sections updated in parallel: features, marker syntax (+ new type-alias section), comparison matrix, feature-status table, deployment (+ browser-lifecycle section and size-cap relaxation risk note), API (+ new observability section with the 8-event table), extensions, FAQ (4 new entries), contributing.
+- docs/errors.md: added `E_MARKER_ALIAS` (code table 28 → 29); `E_MARKER_PRO` description updated (no Pro-exclusive marker types at present; the guidance mechanism is retained).
+
 ## [1.6.3] - 2026-11-24
 
 ### Changed

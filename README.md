@@ -14,6 +14,8 @@ A Node.js server-side library that goes Excel template → marker substitution �
 
 **Official website**: [https://www.krstation.com/](https://www.krstation.com/)
 
+<a id="toc"></a>
+
 ## Contents
 
 - [Quick start](#quick-start)
@@ -71,6 +73,8 @@ npx xlsx2pdf convert tpl.xlsx --data '{"name":"Alice"}' --out out.pdf
 
 A runnable end-to-end example ships in `examples/basic.mjs` — in a source checkout, `npm run example` generates a demo template on the fly and outputs `examples/output/demo.pdf`.
 
+↑ [Back to contents](#toc)
+
 ---
 
 <a id="what-for"></a>
@@ -87,6 +91,8 @@ A few things it doesn't do:
 
 If all you want is to turn any xlsx into a PDF as-is, LibreOffice or a dedicated converter is a better fit.
 
+↑ [Back to contents](#toc)
+
 ---
 
 <a id="why"></a>
@@ -96,6 +102,8 @@ If all you want is to turn any xlsx into a PDF as-is, LibreOffice or a dedicated
 A few things we value about it: the template is just plain Excel, so business users don't have to learn a new tool; nothing native to compile and no Office dragged in on install; rendering goes through Chrome, so output is consistent across Windows / Linux / macOS; the fiddly bits that usually break — merged cells, rich text, numFmt — are handled and tested; and marker types, field resolvers and model hooks are all extensible.
 
 We should also be clear about the community edition's limits: column widths follow Excel's official formula using the workbook's default font (a built-in heuristic table covers common fonts such as SimSun and Microsoft YaHei, so Chinese templates no longer render narrow; column widths of Chinese templates changed in 1.6.0 — if you upgrade from 1.5.x and keep pixel-level visual baselines, re-run them), while Pro adds browser-measured per-column correction for precision-sensitive layouts, and single-page adaptive layout for dynamic-length business content (font-size / row-height adjustment with minimum constraints — see [Community vs Pro](#compare)). It's just a Node.js library — to use it from another language, run a small Node service and call it over HTTP, or hang a Node sidecar off your app.
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -109,12 +117,19 @@ We should also be clear about the community edition's limits: column widths foll
 - **Style fidelity**: merged cells, font / color / background / borders, in-cell rich text
 - **Number-format inheritance**: percent / currency / thousands / date automatically (e.g. `¥#,##0.00` → `¥1,234.50`)
 - **Template-owned page setup**: standard paper A3/A4/A5/B4/B5/letter/legal, orientation & margins decided by the template — changing paper needs no code change
+- **Precise scaling (since 1.7.0)**: `option.scale` 1~400% (matching Excel's print-scaling cap), 100 synonymous with `'auto'`; a scaling set in the template itself already applies
 - **Rich-media markers (built-in since 1.1.0)**: `${photo|image}`, `${code|barcode}` (Code128), `${qr|qrcode}`; local path / http(s) URL / base64 DataUrl; overlay params `w/h/ox/oy/zindex/opacity`; unset size auto-normalized to original dimensions
+- **Text-watermark marker (built-in since 1.7.0)**: `${stamp|watermark}` (`print` is a legacy alias) for stamp / void scenarios; z-index / opacity use the same overlay params as images, font size inherits the cell (watermarks auto-fitting the layout are in Pro)
 - **Detail-row index mapping**: `${#items.name}` repeated per row, the engine takes successive array indices (`items.0`, `items.1`…); row count fixed by the template, nested fields & numFmt inheritance supported
+- **Empty-row placeholder recognition (since 1.7.0)**: `emptyRowPlaceholders` treats rows made of placeholders like `--` as empty rows, row heights preserved (adaptive-shrink interplay is in Pro)
 - **Bundled headless Chrome**: no external Office engine, consistent rendering
+- **Browser lifecycle (since 1.7.0)**: idle auto-reclaim after 60s (on by default, can be disabled), render-count recycling / wall-clock age rotation parameterizable (off by default), see [Deployment](#deploy)
 - **Lightweight preview**: `excel2html()` outputs HTML only, no browser launch
-- **Extensible**: three extension points (marker types / field resolvers / model hooks), custom `markerRegex` / `markerSeparator`
-- **Engineering**: ESM / CJS dual mode + TypeScript declarations, built-in template-size / cell-count safety caps, stable error codes with bilingual messages, CLI (`xlsx2pdf convert`)
+- **Render event hook (since 1.7.0)**: `configure({ onEvent })` bridges stage timing, wire it to pino or any logger yourself — zero new dependencies in the library
+- **Extensible**: three extension points (marker types / field resolvers / model hooks), custom `markerRegex` / `markerSeparator`, configurable type aliases (`markerAliases`)
+- **Engineering**: ESM / CJS dual mode + TypeScript declarations, template-size / cell-count safety caps (parameterizable since 1.7.0, relaxation risk in [Deployment](#deploy)), stable error codes with bilingual messages, CLI (`xlsx2pdf convert`)
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -184,6 +199,8 @@ try {
 
 The CLI prints the code, the message and a doc anchor on failure, and exits non-zero.
 
+↑ [Back to contents](#toc)
+
 ---
 
 <a id="markers"></a>
@@ -200,14 +217,15 @@ Marker format: `${field|type_param1_param2…}`. The `|` and everything after it
 | `image`   | image embedding, `img` is an alias; value is a local path / http(s) URL / base64 DataUrl; unset size normalizes to original dimensions, setting one side derives the other by aspect ratio | `${photo\|image_w120_h40}`   |
 | `barcode` | barcode (Code128); value is the text to encode                                                                                                                                             | `${code\|barcode_w200_h60}`  |
 | `qrcode`  | QR code; value is the text to encode                                                                                                                                                       | `${qr\|qrcode_w80_h80}`      |
+| `watermark` | text-watermark overlay, `print` is a legacy alias; width follows the cell, font size inherits the cell, z-index / opacity same as images                                                  | `${stamp\|watermark_zindex1_opacity0.3}` |
 
-The `watermark` (text watermark) marker type is a Pro capability; in the community edition it raises an explicit guidance error rather than silently rendering as text. A custom handler can still return a watermark overlay — see [Extensions](#extend).
+`watermark` is built-in since 1.7.0, rendered at the cell's font size with overlay params effective; watermarks auto-fitting the layout (font shrink / wrapping) are in Pro. A custom handler can also return a watermark overlay — see [Extensions](#extend).
 
 Image content is validated by magic bytes and structure (same check for base64 / remote / local sources, never trusting content-type / extension alone): corrupt or non-image content degrades to empty and is recorded in the result `warnings` — one broken image never fails the whole document, see [Degradation warnings](#warnings).
 
 ### Parameter keys
 
-Image / barcode / QR share these keys (joined with `_`, e.g. `image_w120_h40_ox5`):
+Image / barcode / QR share these keys (joined with `_`, e.g. `image_w120_h40_ox5`); `watermark` shares `zindex` / `opacity` (width follows the cell; `w/h/ox/oy` do not apply):
 
 | Key       | Example      | Meaning                                                                                                                                                                                                |
 | :-------- | :----------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -218,7 +236,24 @@ Image / barcode / QR share these keys (joined with `_`, e.g. `image_w120_h40_ox5
 | `zindex`  | `zindex2`    | z-index: 0 same layer as template, negative below, positive above, stackable; non-zero is treated as a pure overlay — does not stretch the row height, overflow still shows                            |
 | `opacity` | `opacity0.5` | opacity 0~1 (same as CSS `opacity`, 0.5 = semi-transparent); values >1 are treated as a percentage for backward compatibility (`opacity50` → 0.5), out-of-range clamped to bounds                      |
 
-> Community size normalization is pure-JS probing (image-size, no compression); automatic image compression and DPI-aware physical sizing are in Pro. `minsize` (the font-shrink floor) depends on Pro's single-page adaptive layout and has no effect here; `lineheight` only affects watermark-overlay line height, and the built-in `watermark` type is Pro.
+> Community size normalization is pure-JS probing (image-size, no compression); automatic image compression and DPI-aware physical sizing are in Pro. `minsize` (the font-shrink floor) depends on Pro's single-page adaptive layout and watermark auto-fit and has no effect here; `lineheight` only affects watermark-overlay line spacing (effective in the community edition); watermarks auto-fitting font size and wrapping to the layout are in Pro.
+
+<a id="markeraliases"></a>
+
+### Type aliases (markerAliases)
+
+Built-in default aliases: `img` → `image`, `print` → `watermark` (legacy compatibility). Aliases normalize to the canonical type at parse time — behavior is identical to writing the canonical name. The mapping is customizable (since 1.7.0):
+
+```javascript
+// Per-call (this generation only, over configure global): template writes ${stamp|seal}
+await excel2pdf({ template, data, option: { markerAliases: { seal: 'watermark' } } });
+
+configure({ markerAliases: { seal: 'watermark' } }); // global default
+configure({ markerAliases: null }); // restore built-in img/print
+configure({ markerAliases: {} }); // clear all aliases
+```
+
+The semantics are **whole-object replacement**, not merge: passing `{ seal: 'watermark' }` means img/print no longer apply. When an alias is disabled and the template still uses that token with no same-named dedicated type registered, it throws `E_MARKER_ALIAS` explicitly (never silently degrades to text); other unknown type names still fall back to text. A plugin registering a type with the same name as an alias (e.g. `use({ markerTypes: { print: ... } })`) takes over that alias slot, silently without a warning. Alias targets must be known canonical types (built-in or registered); alias→alias chains are not allowed.
 
 ### Default values
 
@@ -322,6 +357,8 @@ data: { items: [{ name: 'A' }, { name: 'B' }] }
 
 Detail-row count is fixed by the template: extra rows are cleared when data is shorter, and markers are cleared for an empty array. To emit many pages from one template (`data` as an array), use Pro's array batch. With `data` omitted, one empty-template page is rendered (markers cleared by default / empty value).
 
+↑ [Back to contents](#toc)
+
 ---
 
 <a id="compare"></a>
@@ -335,21 +372,38 @@ The community edition can take a single text / rich-media report all the way thr
 | Single-document text / rich-media reports                                                              |                          ✅                           |                          ✅                          |
 | Image / QR / barcode basic embedding                                                                   |                          ✅                           |                          ✅                          |
 | Automatic image compression + DPI-aware sizing                                                         |                          ❌                           |                          ✅                          |
-| autoInsertImage / watermark markers                                                                    |                          ❌                           |                          ✅                          |
+| autoInsertImage (automatic image insertion)                                                            |                          ❌                           |                          ✅                          |
+| Text-watermark markers (watermark/print)                                                               |    ✅ basic form (font size inherits the cell)    |   ✅ incl. layout auto-fit   |
 | Detail-row index mapping (#array.field)                                                                |                          ✅                           |                          ✅                          |
 | Array multi-page batch (data array → N pages)                                                          |                          ❌                           |                          ✅                          |
 | Batched multi-page output (`batchSize`, concurrency-limited between batches)                             |                          ❌                           |                          ✅                          |
 | Single-page adaptive layout (font-size & row-height adjustment, minimum constraints, overflow warning) |                          ❌                           |                          ✅                          |
+| Precise scaling (scale 1~400%)                                                                         |                          ✅                           |                          ✅                          |
+| Empty-row placeholder recognition (emptyRowPlaceholders)                                               |        ✅ (adaptive-shrink interplay in Pro)        |                          ✅                          |
 | Column-width precision                                                                                 |   official formula + common-font heuristic (1.6.0)    | browser-measured pixel accuracy + font-missing guard |
 | Custom paper (receipt rolls) direct read                                                               |                          ❌                           |                          ✅                          |
 | Landscape WPS / Clodop (a browser print control) print adaptation                                      |                          ❌                           |                          ✅                          |
-| Concurrency / memory-admission guard                                                                   | concurrency configurable (default 1, no memory guard) |     parameterized guardrails + memory admission      |
+| Concurrency / memory-admission guard                                                                   | concurrency & size caps configurable (no memory guard) | parameterized guardrails + memory admission + autonomous guarding |
+| Browser lifecycle (idle reclaim / count recycling / age rotation)                                      |     ✅ configurable (idle default 60s)     |  ✅ zero-config production defaults  |
+| Render event hook (onEvent)                                                                            |                          ✅                           | ✅ (observe sink + request timeline) |
 | Custom extensions (3 points + custom syntax)                                                           |                          ✅                           |                          ✅                          |
 | License                                                                                                |            Apache-2.0, free commercial use            |                   commercial EULA                    |
 
-The "single-page adaptive layout" row deserves a plain explanation. With dynamic business data, text often outgrows the space the template reserved: content overflows, row heights fall short, and the page no longer prints complete. In the community edition, overflow goes through native Chrome pagination and may clip or span pages. Pro's adaptive layout works from the browser's actual rendering: it adjusts font sizes and row heights to fit the content onto one page while keeping the template's visual structure. Font-size adjustment respects a global floor and a per-cell floor (`minsize`); row heights follow the space the content actually needs; rows carrying images, barcodes, QR codes or watermarks are protected from compression. The goal is not pixel-level replication of Excel's font sizes and row heights, but a complete, readable, print-ready single page. The boundary is explicit: font sizes and row heights have minimums, and when extreme content still cannot fit, the remaining overflow is clipped and a warning is emitted — adaptive layout fits one page as far as the constraints allow, it does not guarantee it unconditionally. This matters for "must be one page" cases like shipping labels, fixed invoices and inspection reports.
+The ✅ marks only say "present or not". What these Pro capabilities solve in production deserves a plain explanation, one by one.
+
+**Must be one page — single-page adaptive layout.** With dynamic business data, text often outgrows the space the template reserved: content overflows, row heights fall short, and the page no longer prints complete. In the community edition, overflow goes through native Chrome pagination and may clip or span pages. Pro's adaptive layout works from the browser's actual rendering: it adjusts font sizes and row heights to fit the content onto one page while keeping the template's visual structure. Font-size adjustment respects a global floor and a per-cell floor (`minsize`); row heights follow the space the content actually needs; rows carrying images, barcodes, QR codes or watermarks are protected from compression. The goal is not pixel-level replication of Excel's font sizes and row heights, but a complete, readable, print-ready single page. The boundary is explicit: font sizes and row heights have minimums, and when extreme content still cannot fit, the remaining overflow is clipped and a warning is emitted — adaptive layout fits one page as far as the constraints allow, it does not guarantee it unconditionally. This matters for "must be one page" cases like shipping labels, fixed invoices and inspection reports.
+
+**Layout precision — pixel-accurate column width + font-missing guard.** Community column widths are an approximation from the official formula plus heuristics for common fonts — fine for most reports, but the approximation error accumulates, and it shows most in dense tables, amount columns and stamp / signature positions. Pro calibrates column by column against the browser's actual rendering, aligning widths with Excel's print output; missing fonts raise an explicit warning instead of being silently substituted and skewing the whole layout.
+
+**Batch production — array batch + batched output.** The community edition produces one page per call; a testing station emitting hundreds of reports a day has to write its own loop and manage concurrency. Pro takes an array as `data`: one template + N records → an N-page PDF in a single call; beyond `batchSize` pages it renders in batches automatically, keeping the memory peak bounded, with inter-batch concurrency bounded by the guardrails.
+
+**Long-running services — memory admission + guardian autonomy.** Community concurrency and lifecycle parameters are configurable, but "how far is safe" is left for you to find out. Pro estimates admission from the page count before rendering and rejects over-limit requests before they start; the browser guardian recycles and rebuilds at safe points, so repeated large batches do not exhaust host memory. Production defaults are pre-tuned, zero configuration.
+
+**Special media and print paths.** Receipt-roll custom paper read directly; landscape pages adapted for WPS / Clodop print controls; automatic image compression + DPI-aware physical sizing (high-resolution photos no longer bloat the PDF); autoInsertImage; watermarks whose font size and wrapping auto-fit the layout.
 
 **Pro consulting / free POC**: send 3 of your real templates; within 48 hours we return Pro output and a benchmark comparison report. 📧 business@krstation.com
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -371,7 +425,8 @@ Every feature in one table, with a checkbox for implementation status: ☑ imple
 | Custom marker syntax                                                                                  |   ☑    | 1.0.0 | markerRegex / markerSeparator                                                                  |
 | helpers utility namespace                                                                             |   ☑    | 1.0.0 | grew to 7 in 1.1.0 (added generateCode / bufferToDataUrl)                                      |
 | ESM / CJS dual output + TypeScript declarations                                                       |   ☑    | 1.0.0 |                                                                                                |
-| Template-size / cell-count safety caps                                                                |   ☑    | 1.0.0 | 5MB / 20000 cells, fixed values                                                                |
+| Template-size / cell-count safety caps                                                                |   ☑    | 1.0.0 | default 5MB / 20000 cells (parameterization in the next row)                                     |
+| Size-guard parameterization (maxCells/maxTemplateSize)                                                |   ☑    | 1.7.0 | 0/negative = off; relaxation risk in Deployment                                                  |
 | image / img markers                                                                                   |   ☑    | 1.1.0 | local path / http(s) URL / base64 DataUrl                                                      |
 | barcode (Code128) / qrcode markers                                                                    |   ☑    | 1.1.0 | PNG generated by bwip-js                                                                       |
 | Overlay params w/h/ox/oy/zindex/opacity                                                               |   ☑    | 1.1.0 | shared by image / barcode / QR                                                                 |
@@ -384,6 +439,13 @@ Every feature in one table, with a checkbox for implementation status: ☑ imple
 | Render concurrency parameterization (`maxConcurrency`)                                                |   ☑    | 1.4.0 | default 1, positive integers only; no memory guard — see Deployment risk note                  |
 | Generation cancellation (`option.signal` / `E_CANCELLED`)                                             |   ☑    | 1.5.0 | queue removal + render interruption, cooperative best-effort                                   |
 | Degradation warnings channel (`warnings`) + image content validation                                  |   ☑    | 1.5.0 | single image/marker failures degrade instead of throwing; warnings consumable programmatically |
+| Text-watermark marker (watermark, print alias)                                                        |   ☑    | 1.7.0 | overlay params same as images; layout auto-fit is Pro                                            |
+| Precise scaling (`option.scale`)                                                                      |   ☑    | 1.7.0 | 1~400%, 100 synonymous with auto; non-positive falls back to auto                                |
+| Empty-row placeholder recognition (`emptyRowPlaceholders`)                                            |   ☑    | 1.7.0 | placeholder rows treated as empty, row heights preserved                                         |
+| Browser idle auto-reclaim                                                                             |   ☑    | 1.7.0 | default 60s, can be disabled (browserIdleMs:0)                                                   |
+| Browser count recycling / age rotation parameterization                                               |   ☑    | 1.7.0 | off by default, opt-in for production tuning                                                     |
+| Render event hook (stage / timing observability)                                                      |   ☑    | 1.7.0 | onEvent bridges 8 stage events                                                                   |
+| Configurable marker type aliases (markerAliases)                                                      |   ☑    | 1.7.0 | built-in img/print; plugin takeover is silent                                                    |
 | Multi-worksheet selection (`option.sheet`)                                                            |   ☐    |       |                                                                                                |
 | Hidden row / column filtering                                                                         |   ☐    |       |                                                                                                |
 | Reading images already embedded in the template                                                       |   ☐    |       |                                                                                                |
@@ -394,16 +456,21 @@ Every feature in one table, with a checkbox for implementation status: ☑ imple
 | Header / footer / page numbers                                                                        |   ☐    |       |                                                                                                |
 | TS type exports for plugin context and model                                                          |   ☐    |       |                                                                                                |
 | Static template validation `validateTemplate`                                                         |   ☐    |       |                                                                                                |
-| Render event hook (stage / timing observability)                                                      |   ☐    |       |                                                                                                |
 | Official plugin examples (date formatting / enum mapping / i18n / uppercase amount)                   |   ☐    |       |                                                                                                |
-| Browser idle auto-reclaim                                                                             |   ☐    |       |                                                                                                |
 | Template parse caching                                                                                |   ☐    |       |                                                                                                |
 | URL-fetch safety options (allowlist / timeout / size cap)                                             |   ☐    |       |                                                                                                |
 | Official Docker image                                                                                 |   ☐    |       |                                                                                                |
 
 ### Pro-only (not in the community edition)
 
-Automatic image compression + DPI-aware sizing, autoInsertImage, watermark markers, array multi-page batch, batched multi-page output (batchSize), single-page adaptive layout (font-size / row-height adjustment, minimum constraints, overflow warning), pixel-accurate column width + font-missing guard, custom paper direct read, landscape print-control adaptation, precise scaling, parameterized memory guard / template-size guardrails. Effect-level comparison in [Community vs Pro](#compare).
+- **Accuracy**: pixel-accurate column width + font-missing guard, single-page adaptive layout (minimum constraints, overflow warning), watermarks auto-fitting the layout
+- **Stability**: memory-admission guard and page-count cap, guardian-autonomy production defaults
+- **Batch production**: array multi-page batch, batched multi-page output (batchSize)
+- **Special media & print**: automatic image compression + DPI-aware sizing, autoInsertImage, custom paper direct read, landscape print-control adaptation
+
+Effect-level comparison in [Community vs Pro](#compare).
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -466,13 +533,30 @@ Browser resolution precedence: `configure({ browserPath })` > the `XLSX2PDF_BROW
 
 | Item               | Default          | Note                                                                                  |
 | :----------------- | :--------------- | :------------------------------------------------------------------------------------ |
-| Template size      | 5MB              | reject beyond cap                                                                     |
-| Cell count         | 20000            | actual rows×cols; reject beyond cap (streaming pre-check rejects early before load)   |
+| Template size      | 5MB              | reject beyond cap; configurable since 1.7.0 (`maxTemplateSize`, 0/negative = off), default unchanged |
+| Cell count         | 20000            | actual rows×cols; reject beyond cap (streaming pre-check rejects early before load); configurable since 1.7.0 (`maxCells`, 0/negative = off) |
 | Render concurrency | 1 (configurable) | max simultaneously open tabs; excess queued; positive integers only — risk note below |
 
-Template size and cell count are fixed defaults in the community edition and are not parameterized; guardrail parameterization such as `maxCells` / `maxTemplateSize` / `memoryGuard` is a Pro capability; passing them via option in the community edition raises an explicit guidance error (configure silently ignores them instead — see [API](#api)). Render concurrency is parameterized since 1.4.0 (`maxConcurrency`, via configure or per-call option; the default of 1 is unchanged). Remote resources (template URL / image URL) download with a 30-second timeout and a 20MB size cap; failures throw a coded error (`E_DOWNLOAD_*`) with a bilingual message and the URL attached — see [docs/errors.md](./docs/errors.md).
+Template size and cell count are parameterized since 1.7.0: `maxCells` / `maxTemplateSize` are accepted via both per-call option and configure (non-numbers throw `E_OPTION_INVALID`, 0/negative disables the guard); the defaults of 20000 cells / 5MB are unchanged — read the relaxation risk note below first. The remaining guardrails such as `memoryGuard` / `maxPages` are still Pro (option raises an explicit guidance error, configure silently ignores them — see [API](#api)). Render concurrency is parameterized since 1.4.0 (`maxConcurrency`, via configure or per-call option; the default of 1 is unchanged). Remote resources (template URL / image URL) download with a 30-second timeout and a 20MB size cap; failures throw a coded error (`E_DOWNLOAD_*`) with a bilingual message and the URL attached — see [docs/errors.md](./docs/errors.md).
 
-> **⚠️ Read before raising render concurrency**: the community edition has **no memory-admission guard**, and Chrome memory grows **linearly** with the number of simultaneously open tabs (measured: ~400–500MB baseline, ~+100MB per tab as a floor, more for large image-heavy templates). Raising `maxConcurrency` on a small container (e.g. 2C4G) can push the whole host service into OOM — not just the library crashing, but every other business in the same process killed with it. Before raising it, budget memory as "baseline + concurrency × per-page peak + the host's own headroom"; setting it above 1 triggers a one-time runtime warning. With multiple worker processes (e.g. egg cluster) each worker holds its own browser singleton, so machine-wide memory ≈ workers × per-worker footprint. The memory-admission guard that lets you "raise concurrency without blowing up" (probes free memory before rendering, admits only when estimate + safety reserve fits) is a Pro capability.
+> **⚠️ Read before raising render concurrency**: the community edition has **no memory-admission guard**, and Chrome memory grows **linearly** with the number of simultaneously open tabs (measured: ~400–500MB baseline, ~+100MB per tab as a floor, more for large image-heavy templates). Raising `maxConcurrency` on a small container (e.g. 2C4G) can push the whole host service into OOM — not just the library crashing, but every other business in the same process killed with it. Before raising it, budget memory as "baseline + concurrency × per-page peak + the host's own headroom"; setting it above 1 triggers a one-time runtime warning. With multiple worker processes (e.g. egg cluster) each worker holds its own browser singleton, so machine-wide memory ≈ workers × per-worker footprint. The memory-admission guard that lets you "raise concurrency without blowing up" (probes free memory before rendering, admits only when free memory minus in-flight estimates covers the page-scaled estimate + safety reserve; the singleton Chrome is recycled after a configurable render count to break the memory ratchet of repeated large batches) is a Pro capability.
+
+> **⚠️ Read before relaxing the size caps**: same story as raising concurrency — the community edition has **no memory-admission guard**, and parsing / rendering an oversized template can exhaust process memory. Setting `maxCells` / `maxTemplateSize` above the defaults (or disabling the guards) triggers a one-time runtime warning; budget against the host's actual memory headroom before relaxing — this is an informed choice, not a recommended configuration. For production guardrails (cap rejection + memory admission), use Pro.
+
+### Browser lifecycle
+
+The browser singleton's lifecycle is configurable since 1.7.0 (configure-level only):
+
+| Key                     | Default | Meaning                                                                                       |
+| :---------------------- | :------ | :-------------------------------------------------------------------------------------------- |
+| `browserIdleMs`         | `60000` | close the singleton when idle beyond the threshold with no in-flight render; next call rebuilds; 0 disables idle reclaim |
+| `browserRecycleRenders` | `0`     | close and rebuild at a safe point after N completed renders (breaks the memory ratchet); off by default |
+| `browserMaxAgeMs`       | `0`     | rotate the singleton at a safe point once its wall-clock age exceeds the threshold; off by default |
+| `protocolTimeoutMs`     | `60000` | CDP call (incl. print) hang ceiling; integers ≥1000 ms only                                     |
+
+Idle reclaim is a new well-meaning default in 1.7.0: a long-running service's browser closes automatically after 60s idle to release memory, and the next call rebuilds it — the cost is one cold start (same semantics as a manual `closeBrowser()`). If first-call latency matters and you want the browser to stay resident, `configure({ browserIdleMs: 0 })` turns it off. Count recycling and age rotation are off by default, meant as opt-in tuning for production services with repeated large batches (see the table above); recycling / rotation only happen at safe points with no in-flight render and never interrupt an ongoing generation.
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -487,7 +571,7 @@ Three extension points, two registration levels: global `use(plugin)` (process-w
 ```
 template xlsx → marker regex matching (customizable)
          → ② field resolution (fieldResolvers → flat lookup → marker default → option.defaults)
-         → ① marker-type handler rendering (built-in text/image/img/barcode/qrcode + custom)
+         → ① marker-type handler rendering (built-in text/image/img/barcode/qrcode/watermark/print + custom)
          → image size normalization (community pure JS, no compression) → WorksheetModel
          → ③ model post-processing hook → HTML rendering → PDF
 ```
@@ -534,7 +618,7 @@ Handler signature: `async (value, option, ctx) => result`.
 | `string`                                                                            | text substitution (same as text)                                                                                                                                                                                 |
 | `number` / `boolean`                                                                | rendered as text (`String(value)`)                                                                                                                                                                               |
 | `{ images: [{ dataUrl, width?, height?, offsetX?, offsetY?, zIndex?, opacity? }] }` | image overlay; unset or 0 `width`/`height` normalizes to original dimensions / aspect ratio (same as built-in image `w`/`h`); `zIndex`/`opacity` follow the same stacking rules as built-in image / barcode / QR |
-| `{ watermarks: [{ text, zIndex?, opacity?, minSize?, lineHeight? }] }`              | text-watermark overlay (width follows the cell, height unbounded); the built-in `watermark` marker type is Pro, but watermarks returned by a custom handler render in the community edition                      |
+| `{ watermarks: [{ text, zIndex?, opacity?, minSize?, lineHeight? }] }`              | text-watermark overlay (width follows the cell, height unbounded); the built-in `watermark` marker type is available in the community edition since 1.7.0 (layout auto-fit is Pro), watermarks returned by a custom handler go through the same rendering                      |
 | `{ text, images, watermarks }`                                                      | mixed                                                                                                                                                                                                            |
 | `null` / `undefined`                                                                | treated as empty (clears the marker)                                                                                                                                                                             |
 
@@ -617,11 +701,13 @@ Engine-homologous utilities are exposed under the `helpers` namespace (`import {
 | :-------------------- | :----------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------ |
 | `getFileBuffer`       | `(source) → Promise<Buffer>`                           | local path / http(s) URL / base64 (incl. Data URL) → Buffer; shared by templates and images                                           |
 | `flattenObject`       | `(obj, prefix?) → flatObj`                             | flatten nested objects / arrays into dot-path keys, same rules as engine resolution (preview the keys a marker can reference)         |
-| `parseMarkerOption`   | `(optionStr?, knownTypes?) → option`                   | parse the option string after the vertical bar (e.g. `text_w100_默认:--`), same rules as the engine                                   |
+| `parseMarkerOption`   | `(optionStr?, knownTypes?, aliases?) → option`         | parse the option string after the vertical bar (e.g. `text_w100_默认:--`), same rules as the engine; aliases defaults to built-in img/print    |
 | `validateMarkerRegex` | `(regex) → void`                                       | validate the custom marker regex contract (g flag + capture group 1); throws on violation                                             |
 | `formatValue`         | `(value, fmt?) → string`                               | render a value in an Excel number format (same implementation as numFmt inheritance); unsupported formats / errors fall back to as-is |
 | `generateCode`        | `(type, text, { width?, height? }) → Promise<dataUrl>` | barcode `'barcode'` (Code128) / QR `'qrcode'` text → base64 image, same as the built-in types                                         |
 | `bufferToDataUrl`     | `(buffer, extension) → dataUrl`                        | Buffer → base64 Data URL                                                                                                              |
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -660,10 +746,15 @@ Engine-homologous utilities are exposed under the `helpers` namespace (`import {
 | `plugins`         | `Plugin[]`                                        | `[]`                                            | per-call extensions, this generation only, same-name overrides global `use()`                                                                       |
 | `markerRegex`     | `RegExp` (g flag + capture group 1)               | built-in `${...}`                               | custom marker matching, takes precedence over configure global                                                                                      |
 | `markerSeparator` | `string`                                          | `'\|'`                                          | the internal "field / type_params" separator, takes precedence over configure global                                                                |
+| `scale`           | `number \| 'auto'`                                | template pageSetup / auto                       | print scaling 1~400% (capped at 400), 100 synonymous with `'auto'`; non-positive / non-numeric falls back to auto without throwing; template-owned scaling already applies |
+| `emptyRowPlaceholders` | `string[]`                                   | `[]`                                            | rows made entirely of these placeholders are treated as empty (row heights preserved); array of strings only                                      |
+| `maxCells`        | `number`                                          | `20000`                                         | cell-count cap, 0/negative disables the guard; over configure global; relaxation risk in [Deployment](#deploy)                                    |
+| `maxTemplateSize` | `number`                                          | `5242880` (5MB)                                 | template file-size cap (bytes), 0/negative disables the guard; over configure global                                                              |
+| `markerAliases`   | `Record<string,string> \| null`                   | built-in img/print                              | type-alias mapping, whole-object replacement; over configure global, `null` restores built-in; see [Type aliases](#markeraliases)                 |
 | `maxConcurrency`  | `number` (positive integer)                       | `1`                                             | max simultaneously rendering tabs, excess queued; over configure global; raising risk in [Deployment](#deploy)                                      |
 | `signal`          | `AbortSignal`                                     | none                                            | cancellation signal: queue removal / render interruption, throws `E_CANCELLED`, see [Cancellation](#cancel)                                         |
 
-Page-setup params (pageSize / orientation / margin) precedence: **per-call option > template pageSetup > Excel built-in defaults**. Pro-only option keys (`fitToPage` / `minFontSize` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders` / `batchSize`) raise an explicit guidance error when passed in the community edition; unknown option keys are likewise rejected (a typo is never silently ignored). Note: configure silently ignores the same guardrail keys rather than throwing — see configure(option) below for why.
+Page-setup params (pageSize / orientation / margin) precedence: **per-call option > template pageSetup > Excel built-in defaults**. Pro-only option keys (`fitToPage` / `minFontSize` / `pageRotate` / `fontGuard` / `memoryGuard` / `maxPages` / `batchSize`) raise an explicit guidance error when passed in the community edition; unknown option keys are likewise rejected (a typo is never silently ignored). Note: configure silently ignores the same guardrail keys rather than throwing — see configure(option) below for why.
 
 `defaults` is a global fallback: when `data` lacks a field and that marker has no default, the same-named value in `defaults` is used. Resolution order is **data → marker-level default → `option.defaults`**:
 
@@ -690,6 +781,14 @@ configure({
   markerRegex: /\{\{([^}]+)\}\}/g, // global marker syntax (null restores built-in ${...})
   markerSeparator: '::', // global internal separator (null restores vertical bar)
   maxConcurrency: 2, // max simultaneously rendering tabs (positive integer, default 1; read the Deployment risk note first)
+  maxCells: 20000, // cell-count cap (0/negative = off; read the Deployment risk note before relaxing)
+  maxTemplateSize: 5 * 1024 * 1024, // template size cap (bytes, 0/negative = off)
+  browserIdleMs: 60000, // idle reclaim ms (default 60s, 0 disables)
+  browserRecycleRenders: 0, // render-count recycling (default 0 = off, opt-in production tuning)
+  browserMaxAgeMs: 0, // wall-clock age rotation ms (default 0 = off)
+  protocolTimeoutMs: 60000, // CDP call hang ceiling (integer ms ≥1000)
+  onEvent: (evt) => console.log(evt), // render event hook (null = off, see Observability)
+  markerAliases: { seal: 'watermark' }, // type aliases (null restores built-in img/print, {} clears)
 });
 ```
 
@@ -701,8 +800,16 @@ configure({
 | `markerRegex`     | `RegExp \| null`            | built-in `${...}` | global marker syntax, per-call option wins; `null` restores built-in                                           |
 | `markerSeparator` | `string \| null`            | `'\|'`            | global internal separator, per-call wins; `null` restores default                                              |
 | `maxConcurrency`  | `number` (positive integer) | `1`               | max simultaneously rendering tabs, excess queued; per-call option wins; one-time risk warning when set above 1 |
+| `maxCells`        | `number`                    | `20000`           | cell-count cap, 0/negative = off; non-numbers throw `E_OPTION_INVALID`; one-time warning above the default |
+| `maxTemplateSize` | `number`                    | `5242880`         | template size cap (bytes), 0/negative = off; same validation & warning rules as `maxCells` |
+| `browserIdleMs`   | `number` (non-negative int) | `60000`           | idle reclaim ms, 0 disables; see [Deployment · Browser lifecycle](#deploy) |
+| `browserRecycleRenders` | `number` (non-negative int) | `0`         | render-count recycling threshold, 0 disables                                               |
+| `browserMaxAgeMs` | `number` (non-negative int) | `0`               | wall-clock age rotation ms, 0 disables                                                     |
+| `protocolTimeoutMs` | `number` (integer ≥1000)  | `60000`           | CDP call (incl. print) hang ceiling                                                        |
+| `onEvent`         | `function \| null`          | `null`            | render event hook, see [Observability](#onevent); non-functions throw `E_OPTION_INVALID`   |
+| `markerAliases`   | `object \| null`            | `null` (built-in img/print) | type-alias mapping, whole-object replacement; `null` restores built-in, `{}` clears; per-call option wins |
 
-The community edition accepts these six keys; the remaining guardrail keys (`maxCells` / `maxTemplateSize` / `memoryGuard` / `fontGuard` / `pageRotate`) are accepted only after Pro declares them via seams — in the community edition they are silently ignored and the fixed safety caps apply (see [Deployment](#deploy)); any other unknown keys are silently ignored too. `batchSize` is per-call option only; configure does not accept it in either edition. `maxConcurrency` is the one exception: open to the community edition and strictly validated (0 / negatives / fractions / non-numbers throw `E_OPTION_INVALID`; there is no "0 = unlimited" semantics).
+The community edition accepts these fourteen keys; the remaining guardrail keys (`memoryGuard` / `maxPages` / `fontGuard` / `pageRotate`) are accepted only after Pro declares them via seams — in the community edition they are silently ignored (see [Deployment](#deploy)); any other unknown keys are silently ignored too. `batchSize` is per-call option only; configure does not accept it in either edition. Validation rules: `maxConcurrency` takes positive integers only (0 / negatives / fractions / non-numbers throw `E_OPTION_INVALID`; there is no "0 = unlimited" semantics); the three lifecycle keys (browserIdleMs / browserRecycleRenders / browserMaxAgeMs) take non-negative integers (0 = off); `protocolTimeoutMs` takes integer ms ≥1000; the two size-guard keys take numbers only (0/negative = off).
 
 This differs from the option section on purpose: option is per-generation input, where Pro keys and mistyped unknown keys both raise an explicit error (fail fast + conversion guidance); configure is process-level configuration, where the community edition tolerantly ignores undeclared keys and falls back to the fixed caps. If you want a Pro guardrail key to be intercepted with an error, put it in option rather than configure.
 
@@ -711,7 +818,40 @@ This differs from the option section on purpose: option is per-generation input,
 - Page setup (pageSize / orientation / margin): per-call option > template pageSetup > Excel built-in defaults;
 - Marker syntax (markerRegex / markerSeparator): per-call option > configure global > built-in defaults;
 - Render concurrency (maxConcurrency): per-call option > configure global > 1;
+- Size guards (maxCells / maxTemplateSize): per-call option > configure global > defaults of 20000 cells / 5MB;
+- Type aliases (markerAliases): per-call option > configure global > built-in img/print;
+- The four browser-lifecycle keys (browserIdleMs / browserRecycleRenders / browserMaxAgeMs / protocolTimeoutMs) and onEvent are configure-level only;
 - Plugins: per-call `option.plugins` merges with global `use()`, same-name resolved in favor of per-call (fieldResolvers run per-call first, transformModel runs per-call last).
+
+<a id="onevent"></a>
+
+### Observability (onEvent)
+
+Pass a callback to `configure({ onEvent })` to receive render-stage events (since 1.7.0); bridge them to pino or any logger yourself — zero new dependencies in the library:
+
+```javascript
+import pino from 'pino'; // your own logging dependency
+import { configure } from 'xlsx2pdf';
+
+const log = pino();
+configure({ onEvent: (evt) => log.info(evt, 'xlsx2pdf') });
+configure({ onEvent: null }); // turn off
+```
+
+There are 8 events, each carrying `step` (event name) and `ts` (millisecond timestamp):
+
+| Event          | Fires when                                        | Main fields                         |
+| :------------- | :------------------------------------------------ | :---------------------------------- |
+| `html`         | template parse + HTML render complete             | `ms`, `pages`                       |
+| `render.wait`  | render-slot wait complete (queueing time)         | `ms`, `pages`                       |
+| `render.chrome`| browser ready + tab created (incl. cold start)    | `ms`                                |
+| `render.print` | Chrome print output complete                      | `ms`, `bytes`, `pages`              |
+| `render`       | one batch render complete                         | `ms`, `pages`, `bytes`, `batch`, `batches` |
+| `merge`        | multi-batch PDF merge complete (batched path only) | `ms`, `bytes`, `batches`           |
+| `rotate`       | landscape rotation complete (rotation path only)  | `ms`, `bytes`                       |
+| `done`         | the whole generation complete                     | `ms` (total), `pages`, `pdfBytes`, `htmlBytes`, `batches` |
+
+The community single-page path receives 6 of them (html / render.wait / render.chrome / render.print / render / done); merge / rotate only appear on the batched / rotation paths. A throwing hook never breaks generation (the exception is swallowed, rendering proceeds); when unconfigured there is zero overhead (no event object is constructed). Pro's observe sink coexists with onEvent, receiving the same event stream.
 
 <a id="cancel"></a>
 
@@ -743,6 +883,8 @@ Failures scoped to a single marker/image do not throw — they degrade to empty 
 const { pdf, warnings } = await excel2pdf({ template: './tpl.xlsx', data });
 if (warnings.length > 0) console.warn('This generation degraded:', warnings);
 ```
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -777,6 +919,20 @@ Resolution order: data → marker-level default → `option.defaults`. The forme
 **Q: How do I branch on errors programmatically?**
 Catch and check `err instanceof Xlsx2pdfError`, then branch on the stable `err.code` (not on message text). Full code table with fixes: [docs/errors.md](./docs/errors.md).
 
+**Q: Community watermark vs Pro — what's the difference?**
+The community edition renders watermarks at the cell's font size with overlay params (z-index / opacity etc.) effective; Pro additionally auto-fits the watermark's font size and wrapping to the layout.
+
+**Q: What happens when the browser sits idle?**
+Since 1.7.0 it closes automatically after 60s idle and the next call rebuilds it (the cost is one cold start); to keep it resident, `configure({ browserIdleMs: 0 })` — see [Deployment · Browser lifecycle](#deploy).
+
+**Q: Can the template size caps be relaxed?**
+Since 1.7.0 `maxCells` / `maxTemplateSize` are configurable (0/negative = off), but the community edition has no memory guard — read the [Deployment risk note](#deploy) first.
+
+**Q: Want `print` as your own dedicated marker?**
+Register a type named `print` via `use()` and it takes over the alias slot (silently, no warning); or adjust / remove the alias via `markerAliases` (after removal, a template still using that token with no dedicated type registered raises `E_MARKER_ALIAS` explicitly — never a silent downgrade).
+
+↑ [Back to contents](#toc)
+
 ---
 
 <a id="maintenance"></a>
@@ -784,6 +940,8 @@ Catch and check `err instanceof Xlsx2pdfError`, then branch on the stable `err.c
 ## Maintenance and versioning
 
 We run this library in our own production for inspection / receipt-style business documents, and it has been running stably for months. Versions follow SemVer; changes are logged in [CHANGELOG.md](./CHANGELOG.md). The community edition is maintained going forward, and its scope is whatever the comparison table and the [feature list](#status) above say.
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -794,6 +952,8 @@ We run this library in our own production for inspection / receipt-style busines
 - Issues / feature requests: [GitHub Issues](https://github.com/krstation-open/xlsx2pdf/issues)
 - Pro consulting / free POC: 📧 business@krstation.com
 - Official website: [https://www.krstation.com/](https://www.krstation.com/)
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -814,7 +974,10 @@ npm test           # ESM smoke
 npm run test:cjs   # CJS smoke
 npm run test:media # rich-media guard (image/barcode/qrcode + overlay + size normalization)
 npm run test:detail # detail-row guard (index mapping + nested + numFmt + full pipeline)
+npm run test:boundary # 1.7.0 boundary guards (scale/lifecycle/empty-row/onEvent/watermark/size-params/aliases)
 ```
+
+↑ [Back to contents](#toc)
 
 ---
 
@@ -825,3 +988,5 @@ npm run test:detail # detail-row guard (index mapping + nested + numFmt + full p
 [Apache-2.0](./LICENSE) © 恺睿（深圳）软件科技有限公司
 
 The community edition is free for commercial use. Pro is a separate closed-source product under a commercial EULA, unrelated to the code in this repository.
+
+↑ [Back to contents](#toc)
