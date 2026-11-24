@@ -12,9 +12,10 @@
  *   helpers              扩展开发工具方法命名空间（引擎同源实现）
  *
  * 核心定位：文本类报表模板 → PDF 的完整通用链路，含自定义扩展能力
- * （use/plugins 三层扩展点、自定义标记语法）。
- * 生产化能力（数组多页批量、图片/条码/水印标记、单页自适应、精确列宽、
- * 自定义纸张、精确缩放、并发/内存护栏等）由商业版经内部接缝
+ * （use/plugins 三层扩展点、自定义标记语法）；富媒体基础形态
+ * （图片/条码/水印标记）与精确缩放/空行占位识别/规模守卫参数化自 1.7.0 内置。
+ * 生产化能力（数组多页批量、单页自适应、水印自适应收敛、精确列宽、
+ * 自定义纸张、内存护栏等）由商业版经内部接缝
  * 注册后启用；未注册时传入对应入参显式报错引导，不静默降级。
  */
 import fs from 'node:fs';
@@ -24,9 +25,9 @@ import { renderHtml, renderTableFragment } from './render.js';
 import { htmlToPdf, closeBrowser } from './pdf.js';
 import { resolvePageSetup, isMeaningfulPageSize } from './pagesetup.js';
 import { getPageDimensions } from './constants.js';
-import { configure, ensureBrowser, getConfig, pkgRoot, validateMaxConcurrency, warnConcurrencyRisk } from './browser.js';
+import { configure, ensureBrowser, getConfig, pkgRoot, validateMaxConcurrency, warnConcurrencyRisk, warnResourceRisk } from './browser.js';
 import { getSeams, hasCapability } from './seams.js';
-import { use } from './registry.js';
+import { use, validateMarkerAliases } from './registry.js';
 import { flattenObject, getFileBuffer, parseMarkerOption, validateMarkerRegex } from './utils.js';
 import { formatValue } from './numfmt.js';
 import { generateCode, bufferToDataUrl } from './barcode.js';
@@ -47,13 +48,10 @@ const DEFAULT_BATCH_SIZE = 10;
 const PRO_OPTION_KEYS = {
   fitToPage: ['fit', '单页自适应（内容超页自动收敛不裁剪）'],
   minFontSize: ['fit', '自适应字号下限'],
-  scale: ['scale', '精确缩放（1~400%）'],
   pageRotate: ['pageRotate', '横向 /Rotate 打印链路适配'],
   fontGuard: ['fontGuard', '默认字体缺失守卫'],
-  maxCells: ['resourceGuards', '单元格数上限参数化'],
-  maxTemplateSize: ['resourceGuards', '模板体积上限参数化'],
+  maxPages: ['resourceGuards', '产出页数上限参数化'],
   memoryGuard: ['resourceGuards', '内存准入守卫'],
-  emptyRowPlaceholders: ['emptyRowPlaceholders', '空行占位字符（自适应配套）'],
   batchSize: ['arrayData', '分批出片（页数多时分批渲染再合并）'],
 };
 
@@ -103,11 +101,47 @@ function validateParams({ template, data, option = {} }) {
   // 生效链路在 excel2pdf（excel2html 不启动浏览器，仅校验不消费）
   if (option.maxConcurrency !== undefined) validateMaxConcurrency(option.maxConcurrency, 'option');
 
+  // 空行占位识别（1.7.0 起社区版开放）：只接受字符串数组（自适应收缩联动仍 Pro）
+  if (option.emptyRowPlaceholders !== undefined
+    && (!Array.isArray(option.emptyRowPlaceholders) || option.emptyRowPlaceholders.some((s) => typeof s !== 'string'))) {
+    throw xlsxError('E_OPTION_INVALID',
+      `[xlsx2pdf] option.emptyRowPlaceholders 只接受字符串数组（如 ['--']），收到：${JSON.stringify(option.emptyRowPlaceholders)}`,
+      `option.emptyRowPlaceholders accepts an array of strings only (e.g. ['--']), received: ${JSON.stringify(option.emptyRowPlaceholders)}.`);
+  }
+
+  // 规模守卫参数化（1.7.0 起社区版开放）：数值必需，0/负数=关闭语义保留
+  for (const key of ['maxCells', 'maxTemplateSize']) {
+    if (option[key] !== undefined && typeof option[key] !== 'number') {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] option.${key} 只接受数值（0/负数关闭守卫），收到：${JSON.stringify(option[key])}`,
+        `option.${key} accepts a number only (0/negative disables the guard), received: ${JSON.stringify(option[key])}.`);
+    }
+  }
+
+  // 标记类型别名（1.7.0 起）：替换式映射，null 恢复内置默认；
+  // 调用级插件注册的类型同样计入已知规范类型（目标校验面）
+  if (option.markerAliases !== undefined) {
+    const extraTypes = [];
+    if (Array.isArray(option.plugins)) {
+      for (const p of option.plugins) {
+        if (p && typeof p === 'object' && p.markerTypes) extraTypes.push(...Object.keys(p.markerTypes));
+      }
+    }
+    validateMarkerAliases(option.markerAliases, 'option', extraTypes);
+  }
+
   // 分批出片批大小：只接受正整数；页数超过此值时分批渲染再合并（能力闸门由 PRO_OPTION_KEYS 统一把守）
   if (option.batchSize !== undefined && (!Number.isInteger(option.batchSize) || option.batchSize < 1)) {
     throw xlsxError('E_OPTION_INVALID',
       `[xlsx2pdf] option.batchSize 只接受正整数，收到：${JSON.stringify(option.batchSize)}`,
       `option.batchSize accepts positive integers only, received: ${JSON.stringify(option.batchSize)}.`);
+  }
+
+  // 产出页数上限：只接受正整数（configure 级非负整数含 0=不限，调用级不允许 0 歧义）
+  if (option.maxPages !== undefined && (!Number.isInteger(option.maxPages) || option.maxPages < 1)) {
+    throw xlsxError('E_OPTION_INVALID',
+      `[xlsx2pdf] option.maxPages 只接受正整数，收到：${JSON.stringify(option.maxPages)}`,
+      `option.maxPages accepts positive integers only, received: ${JSON.stringify(option.maxPages)}.`);
   }
 
   // 取消信号（1.5.0 起）：只接受 AbortSignal，两个生成 API 同口径
@@ -118,8 +152,9 @@ function validateParams({ template, data, option = {} }) {
   }
 
   // 未知 option 键同样拒绝：拼错入参不应被静默忽略
-  // （plugins/markerRegex/markerSeparator/maxConcurrency/signal 为社区版能力，恒放行）
-  const ALLOWED_KEYS = ['pageSize', 'orientation', 'margin', 'defaults', 'plugins', 'markerRegex', 'markerSeparator', 'maxConcurrency', 'signal'];
+  // （plugins/markerRegex/markerSeparator/maxConcurrency/signal 与 1.7.0 下放键为社区版能力，恒放行）
+  const ALLOWED_KEYS = ['pageSize', 'orientation', 'margin', 'defaults', 'plugins', 'markerRegex', 'markerSeparator', 'maxConcurrency', 'signal',
+    'scale', 'emptyRowPlaceholders', 'maxCells', 'maxTemplateSize', 'markerAliases'];
   for (const [key, [cap]] of Object.entries(PRO_OPTION_KEYS)) {
     if (hasCapability(cap)) ALLOWED_KEYS.push(key);
   }
@@ -168,8 +203,10 @@ export function getVersion() {
  * @param {Object|Object[]} [params.data] - 数据对象（支持嵌套点路径取值）；数组多页需商业版
  *   注册 arrayData 能力；缺省或空数组时按 [{}] 渲染一页空模板
  * @param {Object} [params.option] - 配置项（页面设置类优先级：用户传参 > 模板 pageSetup > Excel 内建默认，见 pagesetup.js）
- * @returns {Promise<{ html: string, pages: Array, warnings: string[] }>} pages 为逐页解析结果（内部使用）；
- *   warnings 为本次生成的降级告警（图片损坏/handler 失败等，逐次独立，并发安全）
+ * @returns {Promise<{ pages: Array, warnings: string[] }>} pages 为逐页解析结果（内部使用）；
+ *   warnings 为本次生成的降级告警（图片损坏/handler 失败等，逐次独立，并发安全）。
+ *   不在此拼装全量 HTML：分批出片路径的全量 HTML 推迟到出片完成后才拼，
+ *   避免与在途批的 HTML 叠加驻留（Node 堆峰值放大）
  */
 async function buildHtml({ template, data, option = {} }) {
   validateParams({ template, data, option });
@@ -193,10 +230,14 @@ async function buildHtml({ template, data, option = {} }) {
     // 模板规模守卫：调用级 > 全局 > 内置默认（见 browser.js config）
     maxCells: option.maxCells ?? getConfig().maxCells,
     maxTemplateSize: option.maxTemplateSize ?? getConfig().maxTemplateSize,
+    // 标记类型别名：调用级 > 全局 > 内置默认（engine 内解析，null 恢复内置）
+    markerAliases: option.markerAliases,
     warnings,
     signal: option.signal,
     shared: {},
   };
+  // 规模上限放宽的运行期风险告警（一次性；configure 级同口径，见 browser.js）
+  warnResourceRisk(engineOpts.maxCells, engineOpts.maxTemplateSize);
   const skeleton = await parseTemplateSkeleton(template, engineOpts);
 
   const pages = [];
@@ -210,7 +251,7 @@ async function buildHtml({ template, data, option = {} }) {
     pages.push({ model, ...setup });
   }
 
-  return { html: assembleHtml(pages, option), pages, warnings };
+  return { pages, warnings };
 }
 
 /**
@@ -282,6 +323,7 @@ function assembleHtml(pages, option) {
  */
 export async function excel2pdf({ template, data, option = {} }) {
   const seams = getSeams();
+  const t0 = Date.now(); // 可观测性：请求总耗时起点（含准入排队）
 
   // pageRotate 合法性先于渲染校验：拼错入参不应白占一个并发槽位与渲染耗时
   // （能力未注册时 option.pageRotate 由 validateParams 抛 Pro 引导，此处不重复校验）
@@ -295,7 +337,64 @@ export async function excel2pdf({ template, data, option = {} }) {
   // 调用级并发调大时的运行期风险告警（校验已在 validateParams 统一做过）
   if (option.maxConcurrency !== undefined) warnConcurrencyRisk(option.maxConcurrency);
 
-  const { html, pages, warnings } = await buildHtml({ template, data, option });
+  // 页数 cap 先于准入：万页请求快速失败，不白占排队名额与 Node 堆
+  const maxPages = option.maxPages ?? getConfig().maxPages;
+  const estPages = Array.isArray(data) ? (data.length || 1) : 1;
+  if (maxPages > 0 && estPages > maxPages) {
+    throw xlsxError('E_PAGE_CAP',
+      `[xlsx2pdf] 产出页数超上限：data 共 ${estPages} 页，超过 maxPages=${maxPages}，请拆分请求`,
+      `Output page cap exceeded: data yields ${estPages} pages, over maxPages=${maxPages}; split the request.`);
+  }
+
+  // 请求级准入（商业版接缝）：buildHtml 之前整份报告估算，守住 Node 渲染期堆；
+  // 排队请求不建 model/不拼 HTML（重试风暴的堆放大数据此消失）
+  // 返回兼容两形态：releaseFn 或 {release, ticket}（sidecar 客户端携带 ticket，
+  // 经 withRequestContext 接缝注入请求上下文供 renderBackend 读取）
+  const admitResult = seams.requestAdmit
+    ? await seams.requestAdmit({ pages: estPages, data, option }, option.signal)
+    : null;
+  const releaseRequest = typeof admitResult === 'function' ? admitResult : (admitResult && admitResult.release) || (() => { });
+  const run = () => generatePdf({ template, data, option, seams, pageRotate, t0 });
+  try {
+    return await (seams.withRequestContext
+      ? seams.withRequestContext(releaseRequest, admitResult, run)
+      : run());
+  } finally {
+    releaseRequest();
+  }
+}
+
+/** excel2pdf 主体（请求级准入已持有）：buildHtml → 分批/单文档出片 → 合并/旋转 */
+async function generatePdf({ template, data, option, seams, pageRotate, t0 }) {
+  // 可观测性事件发射：社区 onEvent 钩子与商业版 sink 双通道共存；
+  // 两者皆无时零开销（不构造 evt）；钩子异常不击穿渲染
+  const emit = (step, fields) => {
+    const hook = getConfig().onEvent;
+    const sink = seams.emitEvent;
+    if (!hook && !sink) return;
+    const evt = { step, ts: Date.now(), ...fields };
+    if (hook) { try { hook(evt); } catch (_) { /* 钩子异常不击穿渲染 */ } }
+    if (sink) sink(evt);
+  };
+  const tHtml = Date.now();
+  const { pages, warnings } = await buildHtml({ template, data, option });
+  emit('html', { ms: Date.now() - tHtml, pages: pages.length });
+  const pageCount = pages.length;
+  const maxPages = option.maxPages ?? getConfig().maxPages;
+  if (maxPages > 0 && pages.length > maxPages) {
+    throw xlsxError('E_PAGE_CAP',
+      `[xlsx2pdf] 产出页数超上限：解析得 ${pages.length} 页，超过 maxPages=${maxPages}，请拆分请求`,
+      `Output page cap exceeded: parsed ${pages.length} pages, over maxPages=${maxPages}; split the request.`);
+  }
+
+  // 全页几何纵向时跳过 /Rotate（按解析后几何判定，兼容自定义纸张 portrait 但几何横向）
+  const hasLandscapeGeometry = pages.some((p) => {
+    const d = getPageDimensions(p.pageSize, p.orientation);
+    return d.widthMm > d.heightMm;
+  });
+
+  // 调用级参数自动调优（商业版降级阶梯：内存紧张时自动缩批/降并发）
+  if (seams.tuneOptions) option = { ...option, ...(await seams.tuneOptions(option, { pages: pages.length })) };
 
   // fontGuard：调用级 > 全局 configure > 默认 'warn'；非法值抛错（与 configure 一致）
   const fontGuard = option.fontGuard ?? getConfig().fontGuard;
@@ -309,54 +408,77 @@ export async function excel2pdf({ template, data, option = {} }) {
   // 分批出片：页数超过 batchSize 时按批拆分，每批独立标签页出片（纸张取批内首页，
   // 顺带支持跨批混合纸张/方向），批间并发由标签页信号量与内存准入天然限流，
   // 产物经商业版接缝按序合并。≤ batchSize 保持单文档路径，产物字节不变
-  const batchSize = option.batchSize ?? DEFAULT_BATCH_SIZE;
+  const batchSize = option.batchSize ?? getConfig().batchSize ?? DEFAULT_BATCH_SIZE;
   let pdf;
+  let html;
+  let batchCount = 1;
   if (pages.length > batchSize && seams.mergePdf) {
     const batches = [];
     for (let i = 0; i < pages.length; i += batchSize) batches.push(pages.slice(i, i + batchSize));
+    batchCount = batches.length;
     const batchWarnings = new Array(batches.length);
-    const buffers = await Promise.all(batches.map(async (batch, bi) => {
+    // 批产物收集器（商业版磁盘 spill）：超阈落盘，Node 堆与页数解耦；缺省内存数组
+    const store = seams.createBatchStore ? seams.createBatchStore() : null;
+    const buffers = store ? null : [];
+    await Promise.all(batches.map(async (batch, bi) => {
       // 逐批取消检查：abort 后未启动的批不再进入渲染（在途批由 htmlToPdf 内部竞态中断）
       throwIfAborted(option.signal);
       const first = batch[0];
-      const rendered = await htmlToPdf(assembleHtml(batch, option), {
+      // HTML 传工厂：准入/槽位拿到后才拼装，排队中的批不占 Node 堆；
+      // pageCount 传批内页数，内存准入按页数放大估算
+      const tR = Date.now();
+      const rendered = await htmlToPdf(() => assembleHtml(batch, option), {
         pageSize: first.pageSize,
         orientation: first.orientation,
         margin: first.margin,
         fontGuard,
         maxConcurrency: option.maxConcurrency,
+        pageCount: batch.length,
         signal: option.signal,
       });
+      emit('render', { ms: Date.now() - tR, pages: batch.length, bytes: rendered.buffer.length, batch: bi, batches: batches.length });
       batchWarnings[bi] = rendered.warnings;
-      return rendered.buffer;
+      // 按批序入收集器（Promise.all 完成序不确定，页序靠索引保）
+      if (store) store.add(rendered.buffer, bi); else buffers.push(rendered.buffer);
     }));
     // 告警按批序聚合（Promise.all 完成序不确定，不直接 push 避免告警顺序漂移）
     for (const w of batchWarnings) warnings.push(...(w || []));
-    pdf = buffers.length === 1 ? buffers[0] : await seams.mergePdf(buffers);
+    // 合并层单 pass：rotate=true 时 copyPages 后就地补 /Rotate，省一次全量 parse+save
+    const tM = Date.now();
+    pdf = await seams.mergePdf(store ? store.source() : buffers, { rotate: pageRotate && hasLandscapeGeometry });
+    emit('merge', { ms: Date.now() - tM, bytes: pdf.length, batches: batches.length });
+    if (store && store.dispose) await store.dispose();
+    // 全量 HTML 仅供返回：出片完成后才拼；拼完即释放 pages/batches，
+    // rotate/返回期峰值不再叠加 Σmodel
+    html = assembleHtml(pages, option);
+    pages.length = 0;
+    batches.length = 0;
   } else {
     const firstPage = pages[0];
+    html = assembleHtml(pages, option);
+    const tR = Date.now();
     const rendered = await htmlToPdf(html, {
       pageSize: firstPage.pageSize,
       orientation: firstPage.orientation,
       margin: firstPage.margin,
       fontGuard,
       maxConcurrency: option.maxConcurrency,
+      pageCount: pages.length,
       signal: option.signal,
     });
+    emit('render', { ms: Date.now() - tR, pages: pageCount, bytes: rendered.buffer.length, batch: 0, batches: 1 });
     pdf = rendered.buffer;
     warnings.push(...rendered.warnings);
+    pages.length = 0;
+    // 单文档路径旋转仍走独立接缝（分批路径已在合并层单 pass 完成）
+    if (pageRotate && seams.rotateLandscape && hasLandscapeGeometry) {
+      const tRot = Date.now();
+      pdf = await seams.rotateLandscape(pdf);
+      emit('rotate', { ms: Date.now() - tRot, bytes: pdf.length });
+    }
   }
 
-  // 横向标记补写（商业版接缝）：Chromium 只用「交换 MediaBox 宽高」表达横向且绝不写 /Rotate，
-  // WPS 打印模块 / Clodop 按 /Rotate 选纸会退回纵向纸。
-  // 全页几何纵向时跳过（改写函数对纵向页本就原样返回，省一次 pdf-lib 全量解析）；
-  // 按解析后几何判定而非 orientation 字符串：自定义纸张宽>高时 portrait 也是几何横向
-  const hasLandscapeGeometry = pages.some((p) => {
-    const d = getPageDimensions(p.pageSize, p.orientation);
-    return d.widthMm > d.heightMm;
-  });
-  if (pageRotate && seams.rotateLandscape && hasLandscapeGeometry) pdf = await seams.rotateLandscape(pdf);
-
+  emit('done', { ms: Date.now() - t0, pages: pageCount, pdfBytes: pdf.length, htmlBytes: html.length, batches: batchCount });
   return { pdf, html, warnings };
 }
 
@@ -367,8 +489,14 @@ export async function excel2pdf({ template, data, option = {} }) {
  * @returns {Promise<{ html: string, warnings: string[] }>} warnings 为降级告警（无降级时为空数组）
  */
 export async function excel2html({ template, data, option = {} }) {
-  const { html, warnings } = await buildHtml({ template, data, option });
-  return { html, warnings };
+  const { pages, warnings } = await buildHtml({ template, data, option });
+  const maxPages = option.maxPages ?? getConfig().maxPages;
+  if (maxPages > 0 && pages.length > maxPages) {
+    throw xlsxError('E_PAGE_CAP',
+      `[xlsx2pdf] 产出页数超上限：解析得 ${pages.length} 页，超过 maxPages=${maxPages}，请拆分请求`,
+      `Output page cap exceeded: parsed ${pages.length} pages, over maxPages=${maxPages}; split the request.`);
+  }
+  return { html: assembleHtml(pages, option), warnings };
 }
 
 /**

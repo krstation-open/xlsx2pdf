@@ -1,6 +1,6 @@
 /**
  * 扩展注册表：三层扩展点
- *  ① markerTypes    自定义标记类型（与内置同名时覆盖内置并告警）
+ *  ① markerTypes    自定义标记类型（覆盖内置规范类型时告警；注册别名同名 key = 接管别名槽，静默无告警）
  *  ② fieldResolvers 自定义字段解析器（按序调用，首个非 undefined 命中）
  *  ③ transformModel 模型后处理钩子（按注册顺序调用）
  *
@@ -21,7 +21,7 @@ const globalState = createPluginState();
 /** 全局已注册的插件名（重名注册告警用） */
 const globalNames = new Set();
 
-/** 内置标记类型（由 engine.js 注册；插件同名覆盖并告警） */
+/** 内置标记类型（由 engine.js 注册；插件覆盖规范类型并告警，别名同名 key 接管静默） */
 const builtinMarkerTypes = Object.create(null);
 
 /**
@@ -30,6 +30,51 @@ const builtinMarkerTypes = Object.create(null);
  */
 export function registerBuiltinMarkerTypes(map) {
   Object.assign(builtinMarkerTypes, map);
+}
+
+/**
+ * 校验 markerAliases 映射（configure 与调用级 option 共用）。
+ * 契约：null 恢复内置默认；对象整体替换生效映射；
+ * key 须非空字符串且不得为内置规范类型名或与目标同名；
+ * 目标须为已知规范类型（内置或已注册），不允许 alias→alias 链。
+ * @param {*} value - 待校验映射
+ * @param {string} where - 报错定位（configure / option）
+ * @param {string[]} [extraTypes] - 额外已知类型（调用级插件注册的 markerTypes keys）
+ */
+export function validateMarkerAliases(value, where, extraTypes = []) {
+  if (value === null) return; // 恢复内置默认
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw xlsxError('E_OPTION_INVALID',
+      `[xlsx2pdf] ${where}.markerAliases 只接受对象（别名 → 规范类型名）或 null（恢复内置默认），收到：${JSON.stringify(value)}`,
+      `${where}.markerAliases accepts an object (alias -> canonical type) or null (restore built-in defaults) only, received: ${JSON.stringify(value)}.`);
+  }
+  for (const [key, target] of Object.entries(value)) {
+    if (!key) {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] ${where}.markerAliases 的别名键须为非空字符串`,
+        `${where}.markerAliases alias keys must be non-empty strings.`);
+    }
+    if (builtinMarkerTypes[key]) {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] ${where}.markerAliases 的别名键 "${key}" 不得为内置规范类型名`,
+        `${where}.markerAliases alias key "${key}" must not be a built-in canonical type name.`);
+    }
+    if (typeof target !== 'string' || !target || key === target) {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] ${where}.markerAliases["${key}"] 须为非空字符串且不与别名同名，收到：${JSON.stringify(target)}`,
+        `${where}.markerAliases["${key}"] must be a non-empty string different from the alias itself, received: ${JSON.stringify(target)}.`);
+    }
+    if (value[target] !== undefined) {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] ${where}.markerAliases 不允许 alias→alias 链（"${key}" → "${target}" 仍是别名）`,
+        `${where}.markerAliases does not allow alias-to-alias chains ("${key}" -> "${target}" is still an alias).`);
+    }
+    if (!builtinMarkerTypes[target] && !globalState.markerTypes.has(target) && !extraTypes.includes(target)) {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] ${where}.markerAliases["${key}"] 的目标 "${target}" 不是已知规范类型（内置或已注册）`,
+        `${where}.markerAliases["${key}"] target "${target}" is not a known canonical type (built-in or registered).`);
+    }
+  }
 }
 
 function applyPlugin(state, plugin, { warnName, warnBuiltin } = {}) {

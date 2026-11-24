@@ -2,8 +2,9 @@
  * xlsx2pdf 类型声明（社区版）
  *
  * 社区版 API 面：单页对象数据 + 精简 option + 自定义扩展（use/plugins/标记语法）
- * + 内置富媒体基础标记（image/img/barcode/qrcode）+ #数组.字段 明细行索引映射。
- * 商业版 Pro 能力（数组多页批量/watermark/自适应/精确缩放/护栏等）传入时运行时抛引导错误。
+ * + 内置富媒体基础标记（image/barcode/qrcode/watermark，img/print 历史别名可配）
+ * + #数组.字段 明细行索引映射 + 精确缩放/空行占位识别/规模守卫参数化（1.7.0）。
+ * 商业版 Pro 能力（数组多页批量/单页自适应/水印自适应收敛/内存护栏等）传入时运行时抛引导错误。
  * 可预期失败均抛 Xlsx2pdfError（携带稳定 err.code，码表见 docs/errors.md）。
  */
 
@@ -41,6 +42,7 @@ export type MarkerResult =
         opacity?: number;
       }>;
       watermarks?: Array<{
+        /** 水印文本（内置 watermark 标记类型自 1.7.0 社区版可用；minSize/lineHeight 依赖商业版水印自适应，社区版不生效） */
         text: string;
         zIndex?: number;
         opacity?: number;
@@ -102,6 +104,37 @@ export interface GenerateOptions {
    */
   maxConcurrency?: number;
   /**
+   * 精确缩放（1~400%，与 Excel 上限对齐；1.7.0 起社区版开放）。
+   * 容错契约：100 与 'auto' 同义；>400 封顶 400；非正数/非数字回落 auto 不抛错。
+   * 优先级：用户传参 > 模板 pageSetup.scale > auto；模板自带缩放不传 option 也生效。
+   */
+  scale?: number | 'auto';
+  /**
+   * 空行占位字符识别（1.7.0 起社区版开放）：如 ['--'] 把占位符行识别为空行（行高保真），
+   * 只接受字符串数组（违约抛 E_OPTION_INVALID），默认 []。
+   * 自适应收缩联动（占位行随版面压缩）仍为商业版 Pro 能力。
+   */
+  emptyRowPlaceholders?: string[];
+  /**
+   * 模板单元格数上限（实际行×列；1.7.0 起社区版可配），默认 20000，0/负数关闭守卫。
+   * 非数值抛 E_OPTION_INVALID。优先级：调用级 > configure > 默认。
+   * 风险：超默认值放宽且无内存准入守卫时库打一次性告警，见 README 部署节。
+   */
+  maxCells?: number;
+  /**
+   * 模板文件体积上限（字节；1.7.0 起社区版可配），默认 5MB，0/负数关闭守卫。
+   * 非数值抛 E_OPTION_INVALID。优先级与风险口径同 maxCells。
+   */
+  maxTemplateSize?: number;
+  /**
+   * 标记类型别名映射（1.7.0 起）：别名 → 规范类型名，替换式（整体替换生效映射）。
+   * 内置默认 { img: 'image', print: 'watermark' }；null 恢复内置默认，{} 清空全部别名。
+   * 优先级：调用级 > configure({ markerAliases }) > 内置默认。
+   * 插件注册的同名类型接管别名槽（静默无告警）；内置默认别名被禁用且未注册专属类型时抛 E_MARKER_ALIAS。
+   * 非法映射（非对象/规范名作键/alias→alias 链/目标未知）抛 E_OPTION_INVALID。
+   */
+  markerAliases?: Record<string, string> | null;
+  /**
    * 分批出片批大小（商业版 Pro 能力，传入抛 E_OPTION_PRO），只接受正整数，默认 10。
    * 页数超过此值时分批独立标签页渲染再合并（批间并发受 maxConcurrency 限流），
    * 每批纸张取批内首页，顺带支持跨批混合纸张/方向；不超过时保持单文档出片。
@@ -162,6 +195,30 @@ export interface BrowserOptions {
    * 小内存容器（如 2C4G）建议维持默认 1，详见 README 部署节。
    */
   maxConcurrency?: number;
+  /** 模板单元格数上限（默认 20000，0/负数关闭；非数值抛 E_OPTION_INVALID；放宽风险见 README 部署节） */
+  maxCells?: number;
+  /** 模板体积上限字节（默认 5MB，0/负数关闭；非数值抛 E_OPTION_INVALID） */
+  maxTemplateSize?: number;
+  /**
+   * 浏览器空闲回收 ms（非负整数，默认 60000：空闲 60s 自动关闭单例，下次调用重建；
+   * 0 关闭。违约抛 E_OPTION_INVALID。1.7.0 起善意默认，长驻服务冷启动成本见 README 部署节）
+   */
+  browserIdleMs?: number;
+  /** 浏览器墙钟年龄上限 ms（非负整数，默认 0 关闭；超龄且在安全点即轮换，生产调优知情开启） */
+  browserMaxAgeMs?: number;
+  /** 渲染计数回收阈值（非负整数，默认 0 关闭；累计完成 N 次渲染后无在途时冷启动重建，打断内存棘轮） */
+  browserRecycleRenders?: number;
+  /** puppeteer protocolTimeout ms（≥1000 整数，默认 60000：CDP 调用挂起上限） */
+  protocolTimeoutMs?: number;
+  /**
+   * 渲染事件钩子（1.7.0 起社区版可观测性入口）：桥接 8 个阶段事件
+   * （html/render/merge/rotate/done/render.wait/render.chrome/render.print）。
+   * 只接受函数或 null（关闭，违约抛 E_OPTION_INVALID）；钩子异常不击穿渲染；
+   * 未配置时零开销；与商业版 observe sink 共存。
+   */
+  onEvent?: ((evt: { step: string; ts: number; [k: string]: unknown }) => void) | null;
+  /** 标记类型别名映射（替换式；null 恢复内置 img/print，{} 清空；语义同 GenerateOptions.markerAliases） */
+  markerAliases?: Record<string, string> | null;
 }
 
 /** 配置浏览器行为（模块级单例；closeBrowser 后下次启动按新配置重建），返回当前生效配置 */
@@ -186,8 +243,8 @@ export const helpers: {
   getFileBuffer(source: string): Promise<Buffer>;
   /** 嵌套对象/数组拍平为点路径键（与引擎取值同规则） */
   flattenObject(obj: Record<string, unknown>, prefix?: string): Record<string, unknown>;
-  /** 解析标记 option 串（`类型_w100_自定义:值`） */
-  parseMarkerOption(optionStr?: string, knownTypes?: string[]): Record<string, unknown>;
+  /** 解析标记 option 串（`类型_w100_自定义:值`；aliases 为生效别名映射，默认内置 img/print） */
+  parseMarkerOption(optionStr?: string, knownTypes?: string[], aliases?: Record<string, string>): Record<string, unknown>;
   /** 校验自定义标记正则契约（g 标志 + 捕获组 1），违约抛错 */
   validateMarkerRegex(regex: RegExp): void;
   /** 按 Excel 数字格式渲染值（与 numFmt 自动继承同一实现） */

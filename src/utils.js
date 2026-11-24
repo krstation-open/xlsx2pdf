@@ -101,6 +101,51 @@ export function flattenObject(obj, prefix = '') {
 // 远程文件下载
 // ============================================================
 
+// ============================================================
+// 模板跨调用缓存（opt-in 有界 LRU，configure({ templateCacheMB }) 开启）
+// ============================================================
+
+/** 缓存条目 Map（key → {buf, bytes, at}）；插入序即 LRU 序（命中时 delete+set 刷新） */
+const templateCache = new Map();
+let templateCacheBytes = 0;
+const TEMPLATE_URL_TTL_MS = 60000;
+
+function templateCacheBudget() {
+  // 惰性读配置：避免 utils ↔ browser 循环依赖（browser 不 import utils）
+  try {
+    // eslint-disable-next-line no-undef
+    return (globalThis.__xlsx2pdfTemplateCacheMB ?? 0);
+  } catch (_) { return 0; }
+}
+
+/** 供 browser.configure 同步缓存预算（解耦循环依赖的轻量信号面） */
+export function setTemplateCacheBudget(mb) {
+  globalThis.__xlsx2pdfTemplateCacheMB = mb;
+  if (!(mb > 0)) { templateCache.clear(); templateCacheBytes = 0; }
+}
+
+function cacheGet(key, ttlMs) {
+  const hit = templateCache.get(key);
+  if (!hit) return null;
+  if (ttlMs && Date.now() - hit.at > ttlMs) { templateCache.delete(key); templateCacheBytes -= hit.bytes; return null; }
+  templateCache.delete(key); templateCache.set(key, hit);
+  return hit.buf;
+}
+
+function cachePut(key, buf, budgetMB) {
+  if (!(budgetMB > 0)) return;
+  const bytes = buf.length;
+  if (bytes > budgetMB * 1024 * 1024) return; // 单条目超预算不入缓存
+  if (templateCache.has(key)) { templateCacheBytes -= templateCache.get(key).bytes; templateCache.delete(key); }
+  templateCache.set(key, { buf, bytes, at: Date.now() });
+  templateCacheBytes += bytes;
+  while (templateCacheBytes > budgetMB * 1024 * 1024 && templateCache.size > 1) {
+    const oldest = templateCache.keys().next().value;
+    templateCacheBytes -= templateCache.get(oldest).bytes;
+    templateCache.delete(oldest);
+  }
+}
+
 /**
  * 从本地路径 / URL / base64 获取文件 Buffer
  * 支持：本地路径 / http(s) URL / base64 字符串 / 已经是 Buffer
@@ -124,10 +169,16 @@ export async function getFileBuffer(source) {
     return Buffer.from(base64, 'base64');
   }
 
-  // 远程 URL
+  const budgetMB = templateCacheBudget();
+
+  // 远程 URL（缓存带 TTL，避免长期持有过期模板）
   if (/^https?:\/\//i.test(source)) {
+    const cached = cacheGet(`url:${source}`, TEMPLATE_URL_TTL_MS);
+    if (cached) return cached;
     const response = await httpGetBuffer(source, '模板文件');
-    return Buffer.from(response.data);
+    const buf = Buffer.from(response.data);
+    cachePut(`url:${source}`, buf, budgetMB);
+    return buf;
   }
 
   // 纯 base64 字符串（非路径、非 URL 的长字符串，且解码后为有效 ZIP/PK 头）
@@ -139,20 +190,38 @@ export async function getFileBuffer(source) {
     }
   }
 
-  // 本地路径
+  // 本地路径（缓存 key 带 mtime+size，模板更新自动失效）
   const absPath = path.isAbsolute(source) ? source : path.resolve(source);
-  return fs.promises.readFile(absPath);
+  let key = null;
+  if (budgetMB > 0) {
+    try {
+      const st = await fs.promises.stat(absPath);
+      key = `file:${absPath}:${st.mtimeMs}:${st.size}`;
+      const cached = cacheGet(key, 0);
+      if (cached) return cached;
+    } catch (_) { key = null; }
+  }
+  const buf = await fs.promises.readFile(absPath);
+  if (key) cachePut(key, buf, budgetMB);
+  return buf;
 }
 
 // ============================================================
 // 标记解析器
 // ============================================================
 
-/** 核心内置填充类型（仅 text；图片/条码/水印等增强类型由商业版经注册表注入） */
-export const CONTENT_TYPES = ['text'];
+/** 核心内置规范标记类型（解析默认识别面；与 engine 内置注册保持同步） */
+export const CONTENT_TYPES = ['text', 'image', 'barcode', 'qrcode', 'watermark'];
 
-/** 商业版增强标记类型：未注册时模板中出现即显式报错引导（不静默当文本渲染） */
-export const PRO_MARKER_TYPES = ['image', 'img', 'barcode', 'qrcode', 'watermark'];
+/** 内置默认标记类型别名（img/print 历史别名；markerAliases 替换式配置，null 恢复本表、{} 清空） */
+export const DEFAULT_MARKER_ALIASES = { img: 'image', print: 'watermark' };
+
+/** 解析默认识别 token：内置规范类型 + 默认别名 keys */
+const DEFAULT_KNOWN_TYPES = [...CONTENT_TYPES, ...Object.keys(DEFAULT_MARKER_ALIASES)];
+
+/** 商业版独占标记类型引导名单：富媒体基础形态（image/barcode/qrcode/watermark）自 1.7.0 已内置社区版，
+ * 当前为空；机制保留——未来 Pro 独占类型加入本表后，未注册时模板中出现即显式报错引导（不静默当文本渲染） */
+export const PRO_MARKER_TYPES = [];
 
 /**
  * 内置标记语法 ${...} 的匹配正则（默认值）。
@@ -202,12 +271,13 @@ export function validateMarkerRegex(regex) {
  *   ${姓名|text_default:未知}       → 同上（default 别名）
  *
  * @param {string} optionStr - 配置字符串（| 之后的部分，不含字段名）
- * @param {string[]} [knownTypes] - 可识别的类型 token（默认内置类型；含注册表自定义类型时由 engine 传入）
+ * @param {string[]} [knownTypes] - 可识别的类型 token（默认内置规范类型 + 默认别名；含注册表自定义类型与生效别名时由 engine 传入）
+ * @param {Object<string,string>} [aliases] - 生效别名映射（别名 token → 规范类型名；默认内置 img/print）
  * @returns {{ type: string, width?: number, height?: number, offsetX?: number, offsetY?: number, zIndex?: number, opacity?: number, minSize?: number, lineHeight?: number, defaultValue?: string }}
  *   自定义标记类型的扩展键（如 format:xxx）以原始键名透传在返回对象上
- * @throws {Error} 出现未注册的增强标记类型（image/img/barcode/qrcode/watermark）时引导商业版
+ * @throws {Error} 内置默认别名（img/print）被禁用且未注册专属类型时抛 E_MARKER_ALIAS（不静默降级文本）
  */
-export function parseMarkerOption(optionStr = '', knownTypes = CONTENT_TYPES) {
+export function parseMarkerOption(optionStr = '', knownTypes = DEFAULT_KNOWN_TYPES, aliases = DEFAULT_MARKER_ALIASES) {
   const option = { type: 'text' };
   if (!optionStr) return option;
 
@@ -227,16 +297,27 @@ export function parseMarkerOption(optionStr = '', knownTypes = CONTENT_TYPES) {
   const parts = remaining.split('_').filter(Boolean);
   if (parts.length === 0) return option;
 
-  // 第一个部分可能是类型：未注册的增强类型显式引导商业版，已注册类型正常消费
-  // （image/img/barcode/qrcode 自 1.1.0 已内置社区版，实际仅 watermark 会走到此分支）
+  // 第一个部分可能是类型：未注册的 Pro 独占类型显式引导商业版，已注册类型正常消费
+  // （富媒体基础形态自 1.7.0 已内置社区版，PRO_MARKER_TYPES 当前为空，机制保留）
   if (PRO_MARKER_TYPES.includes(parts[0]) && !knownTypes.includes(parts[0])) {
     throw xlsxError('E_MARKER_PRO',
-      `[xlsx2pdf] 标记类型 "${parts[0]}"（图片/条码/二维码/水印）是商业版 Pro 能力，` +
-      '社区版仅支持 text 文本标记。商业版咨询：business@krstation.com',
-      `Marker type "${parts[0]}" is a Pro capability; the community edition has text/image/img/barcode/qrcode built in. Pro inquiries: business@krstation.com`);
+      `[xlsx2pdf] 标记类型 "${parts[0]}" 是商业版 Pro 能力，社区版不提供。商业版咨询：business@krstation.com`,
+      `Marker type "${parts[0]}" is a Pro capability and is not available in the community edition. Pro inquiries: business@krstation.com`);
+  }
+  // 内置默认别名（img/print）被禁用且未注册专属类型：显式报错引导，
+  // 不静默降级文本（历史缺陷：别名移除后水印语义丢失无告警）
+  if (DEFAULT_MARKER_ALIASES[parts[0]] !== undefined && !knownTypes.includes(parts[0])
+    && !(aliases && aliases[parts[0]] !== undefined)) {
+    throw xlsxError('E_MARKER_ALIAS',
+      `[xlsx2pdf] 标记类型 "${parts[0]}" 的内置别名已禁用（markerAliases）且未注册专属类型。` +
+      '请经 use() 注册该类型，或恢复别名映射（configure({ markerAliases: null }) 恢复内置默认）',
+      `The built-in alias for marker type "${parts[0]}" is disabled (markerAliases) and no dedicated type is registered. ` +
+      'Register the type via use(), or restore the alias mapping (configure({ markerAliases: null }) restores the built-in defaults).');
   }
   if (knownTypes.includes(parts[0])) {
-    option.type = parts.shift();
+    const token = parts.shift();
+    // 别名归一为规范类型名（插件注册的同名类型已在 engine 侧排除出映射，优先命中插件 handler）
+    option.type = (aliases && aliases[token]) || token;
   }
 
   // 解析剩余部分中的键值对（字母+数字）
@@ -280,9 +361,10 @@ export function parseMarkerOption(optionStr = '', knownTypes = CONTENT_TYPES) {
  * @param {string[]} [knownTypes] - 可识别的类型 token（透传给 parseMarkerOption）
  * @param {RegExp} [markerRegex] - 标记匹配正则（默认内置 ${...}；自定义语法时传入，契约见 validateMarkerRegex）
  * @param {string} [markerSeparator] - 标记内部「字段 / 类型_参数」分隔符（默认 |，仅取首次出现处切分）
+ * @param {Object<string,string>} [aliases] - 生效别名映射（透传给 parseMarkerOption；默认内置 img/print）
  * @returns {Array<{ raw: string, field: string, option: Object }>}
  */
-export function parseCellMarkers(cellText, knownTypes, markerRegex = DEFAULT_MARKER_REGEX, markerSeparator = DEFAULT_MARKER_SEPARATOR) {
+export function parseCellMarkers(cellText, knownTypes, markerRegex = DEFAULT_MARKER_REGEX, markerSeparator = DEFAULT_MARKER_SEPARATOR, aliases = DEFAULT_MARKER_ALIASES) {
   const markers = [];
   // 每次新建正则实例：g 标志正则的 lastIndex 有状态，若前次解析中途抛错
   // （如增强标记引导）会残留偏移，复用模块级实例将导致后续调用标记漏检
@@ -295,7 +377,7 @@ export function parseCellMarkers(cellText, knownTypes, markerRegex = DEFAULT_MAR
     const sepIdx = inner.indexOf(markerSeparator);
     const field = sepIdx === -1 ? inner : inner.slice(0, sepIdx);
     const optionStr = sepIdx === -1 ? '' : inner.slice(sepIdx + markerSeparator.length);
-    const option = parseMarkerOption(optionStr, knownTypes);
+    const option = parseMarkerOption(optionStr, knownTypes, aliases);
 
     markers.push({ raw, field, option });
   }

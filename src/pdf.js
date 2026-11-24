@@ -14,12 +14,43 @@ import { xlsxError, isCodedError, cancelledError, throwIfAborted } from './error
 /** @type {import('puppeteer-core').Browser|null} */
 let browser = null;
 let launchPromise = null;
+/** 本次浏览器实例生命周期内已完成的渲染槽位数（browserRecycleRenders 回收计数） */
+let rendersSinceLaunch = 0;
+/** 当前实例冷启动完成时刻（browserMaxAgeMs 墙钟年龄轮换） */
+let launchedAt = 0;
+/** 空闲回收定时器（browserIdleMs；无在途渲染且空闲超阈即关单例） */
+let idleTimer = null;
+
+// 进程退出兜底：pipe 传输已保证父死子亡，此处再补一刀防极端残留
+process.once('exit', () => {
+  try { browser?.process()?.kill('SIGKILL'); } catch (_) { /* ignore */ }
+});
+
+/** 装配空闲回收定时器（每次渲染结束/启动时重置；unref 不阻进程退出） */
+function armIdleTimer() {
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  const idleMs = getConfig().browserIdleMs;
+  if (idleMs > 0 && browser && runningPages === 0) {
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      if (runningPages === 0 && browser) closeBrowser().catch(() => { /* 回收失败不阻断 */ });
+    }, idleMs);
+    idleTimer.unref?.();
+  }
+}
 
 /**
  * Linux 启动失败时用 ldd 诊断是否缺系统库（仅错误路径执行，正常渲染零开销）：
  * 缺库 → E_BROWSER_DEPS 附 apt 修复指引；否则维持 E_BROWSER_LAUNCH
  */
 function launchError(err, executablePath) {
+  const rawMsg = String(err && err.message || '');
+  // EACCES：access 预检过但 execve 仍拒（noexec 挂载/LSM 限制等），附排查指引
+  if (/EACCES/.test(rawMsg)) {
+    return xlsxError('E_BROWSER_LAUNCH',
+      `[xlsx2pdf] 浏览器启动失败：执行被拒（EACCES）: ${executablePath}。请检查：① ls -l 执行位（chmod +x）；② 所在挂载点是否 noexec；③ Ubuntu/Debian 下该路径是否为 snap 包装脚本（容器内不可用，改指真实二进制或内置 Chrome）。原始错误：${rawMsg}`,
+      `Browser failed to launch: permission denied (EACCES): ${executablePath}. Check the exec bit (chmod +x), noexec mounts, or snap wrapper scripts (unusable in containers); point to the real binary or the bundled Chrome. Original error: ${rawMsg}`);
+  }
   if (process.platform === 'linux') {
     try {
       const ldd = spawnSync('ldd', [executablePath], { encoding: 'utf8' });
@@ -59,6 +90,9 @@ async function getBrowser() {
       return await puppeteer.launch({
         headless: cfg.headless,
         executablePath,
+        // pipe 传输：CDP over pipe，父进程被 SIGKILL 时 Chrome 随死（WebSocket 会留孤儿）
+        pipe: true,
+        protocolTimeout: cfg.protocolTimeoutMs,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -78,6 +112,8 @@ async function getBrowser() {
     throw err;
   }
   launchPromise = null;
+  rendersSinceLaunch = 0;
+  launchedAt = Date.now();
 
   // 监听断开事件，自动清理；身份判定：仅当断开的是当前单例引用才置 null，
   // 避免旧实例的断开事件晚到、误清已重建的新实例（低频竞态）
@@ -93,6 +129,12 @@ async function getBrowser() {
  * 手动关闭浏览器（通常在进程退出时调用）
  */
 export async function closeBrowser() {
+  // 先等在途冷启动落地再关：否则置空 launchPromise 会让并发 getBrowser 再 launch
+  // 一个 Chrome，先完成的实例被覆盖引用成孤儿（B1 竞态）
+  if (launchPromise) {
+    try { await launchPromise; } catch (_) { /* 启动失败本就无实例可关 */ }
+  }
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   if (browser) {
     try {
       await browser.close();
@@ -196,13 +238,17 @@ function raceAbort(promise, signal) {
  * @property {Object} [margin] - mm
  * @property {'warn'|'throw'|'silent'} [fontGuard] - 模板默认字体缺失时的处理（默认 'warn'；检测由商业版接缝提供）
  * @property {number} [maxConcurrency] - 调用级并发上限（正整数，优先于 configure 全局；缺省用全局值）
+ * @property {number} [pageCount=1] - 本次出片的页数（内部入参）：内存准入按页数放大估算，
+ *   分批出片传批内页数，单文档传总页数；缺省 1 保持单页估算口径
  * @property {AbortSignal} [signal] - 取消信号：排队中摘除、渲染中关闭标签页中断，统一抛 E_CANCELLED
  */
 
 /**
  * 将 HTML 字符串渲染为 PDF Buffer
  *
- * @param {string} html - 完整 HTML 字符串
+ * @param {string|(() => string)} html - 完整 HTML 字符串，或返回 HTML 的工厂函数。
+ *   传工厂时拼装推迟到内存准入与并发槽位都拿到之后才执行：分批出片场景下
+ *   避免全部批的 HTML 在限流生效前急切拼好驻留内存（Node 堆峰值放大）
  * @param {PdfOptions} [option]
  * @returns {Promise<{ buffer: Buffer, warnings: string[] }>} warnings 为渲染期降级告警（如图片解码失败）
  */
@@ -225,22 +271,62 @@ export async function htmlToPdf(html, option = {}) {
 
   // 内存准入先于标签页信号量：不满足「估算+安全余量」时在队列中等待，
   // 不占用并发槽位；与 maxConcurrency 信号量取“与”合流（守卫实现由商业版接缝注入，缺省直接放行）
-  // 注：memoryAdmit 排队轮询不感知 signal（其 maxWaitMs 自带超时兜底），放行后的预检会拦截已取消请求
+  // 注：memoryAdmit 第三入参 signal 供守卫排队期摘队（商业版实现）；缺省守卫不感知时
+  // 由其 maxWaitMs 自带超时兜底，放行后的预检会拦截已取消请求
   const seams = getSeams();
-  const releaseMemory = seams.memoryAdmit ? await seams.memoryAdmit(getConfig().memoryGuard) : () => { };
+  const pageCount = Number.isInteger(option.pageCount) && option.pageCount > 0 ? option.pageCount : 1;
+  // 可观测性事件发射：社区 onEvent 钩子与商业版 sink 双通道共存；
+  // 两者皆无时零开销（不构造 evt）；钩子异常不击穿渲染
+  const emit = (step, fields) => {
+    const hook = getConfig().onEvent;
+    const sink = seams.emitEvent;
+    if (!hook && !sink) return;
+    const evt = { step, ts: Date.now(), ...fields };
+    if (hook) { try { hook(evt); } catch (_) { /* 钩子异常不击穿渲染 */ } }
+    if (sink) sink(evt);
+  };
+
+  // 渲染后端委托（商业版 sidecar 客户端）：准入/槽位/Chrome 全在服务端，
+  // 本地路径整体让位；HTML 惰性拼装语义保留（委托前才调工厂）。
+  // option.__localRender 为内部旁路：guardMode 运行期切 local 时客户端包装层
+  // 回落本地路径用，跳过委托防递归（不构成公开 API）
+  if (seams.renderBackend && !option.__localRender) {
+    const htmlStr = typeof html === 'function' ? html() : html;
+    try {
+      return await seams.renderBackend(htmlStr, { ...option, pageCount });
+    } catch (err) {
+      if (signal && signal.aborted) throw cancelledError();
+      if (isCodedError(err)) throw err;
+      throw xlsxError('E_RENDER',
+        `[xlsx2pdf] 页面渲染失败：${err.message}`,
+        `Page rendering failed: ${err.message}`);
+    }
+  }
+
+  const releaseMemory = seams.memoryAdmit ? await seams.memoryAdmit(getConfig().memoryGuard, pageCount, signal) : () => { };
 
   let slotAcquired = false;
   let pg = null;
   let onAbort = null;
   try {
     throwIfAborted(signal);
+    const tWait = Date.now();
     await acquireSlot(option.maxConcurrency, signal);
     slotAcquired = true;
+    emit('render.wait', { ms: Date.now() - tWait, pages: pageCount });
+
+    // HTML 惰性拼装：拿到准入与槽位后才调工厂，排队期间不占 Node 堆
+    const htmlStr = typeof html === 'function' ? html() : html;
 
     // getBrowser/newPage 失败（浏览器崩溃/协议超时等）同样纳入 E_RENDER 包装；
     // 已带码错误（E_BROWSER_* 等）原样重抛
+    const tChrome = Date.now();
     const br = await getBrowser();
     pg = await br.newPage();
+    emit('render.chrome', { ms: Date.now() - tChrome });
+    // 回收计数在标签页落到当前实例后才累加：冷启动会在 getBrowser 内清零，
+    // 若提前累加会把首次渲染的计数抹掉（阈值偏移一次冷启动）
+    rendersSinceLaunch++;
     throwIfAborted(signal);
 
     // 渲染中取消：abort 时关闭标签页释放资源，并与在途 CDP 调用竞态及时抛 E_CANCELLED
@@ -261,7 +347,7 @@ export async function htmlToPdf(html, option = {}) {
 
     // 图片全部是内联 base64，不存在后续网络请求；load 事件已覆盖子资源加载，
     // 用 networkidle0 只会白等一个 500ms 的空闲判定窗口（实测约 1s）
-    await raceAbort(pg.setContent(html, {
+    await raceAbort(pg.setContent(htmlStr, {
       waitUntil: 'load',
       timeout: 30000,
     }), signal);
@@ -290,6 +376,7 @@ export async function htmlToPdf(html, option = {}) {
     // 生成 PDF
     // puppeteer 返回 Uint8Array，统一转 Buffer（toString/subarray 等语义与类型声明一致）
     throwIfAborted(signal);
+    const tPrint = Date.now();
     const pdfBuffer = await raceAbort(pg.pdf({
       width: `${page.widthMm}mm`,
       height: `${page.heightMm}mm`,
@@ -302,9 +389,12 @@ export async function htmlToPdf(html, option = {}) {
       },
       preferCSSPageSize: false,
     }), signal);
+    emit('render.print', { ms: Date.now() - tPrint, bytes: pdfBuffer.byteLength, pages: pageCount });
 
     throwIfAborted(signal);
-    return { buffer: Buffer.from(pdfBuffer), warnings };
+    // 零拷贝视图：puppeteer 返回的 Uint8Array 底层 ArrayBuffer 即本次产物，
+    // Buffer.from(view) 会再拷一份（PDF 体积×2 瞬时驻留）
+    return { buffer: Buffer.from(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength), warnings };
   } catch (err) {
     // 取消优先：abort 引发的中断（含 pg.close 触发的 CDP 报错）统一 E_CANCELLED；
     // 其余已带码错误（浏览器启动/路径类等）原样重抛；页面渲染/出片失败统一 E_RENDER
@@ -321,7 +411,24 @@ export async function htmlToPdf(html, option = {}) {
     }
     if (slotAcquired) releaseSlot();
     releaseMemory();
+    // 浏览器回收：Chrome 关标签页后不会立刻把内存还给 OS，重复大批量调用会
+    // 棘轮式抬高基线。达到回收阈值且当前无在途渲染时关闭单例，下次调用冷启动
+    // 重建（默认 0 关闭，1.7.0 起社区版可配；Pro 生产默认 20）。launchPromise 在途时
+    // 不回收，避免误清正在启动的实例
+    const recycle = getConfig().browserRecycleRenders;
+    const maxAge = getConfig().browserMaxAgeMs;
+    const aged = maxAge > 0 && launchedAt > 0 && (Date.now() - launchedAt) >= maxAge;
+    if ((recycle > 0 && rendersSinceLaunch >= recycle || aged) && runningPages === 0 && browser && !launchPromise) {
+      rendersSinceLaunch = 0;
+      try { await closeBrowser(); } catch (_) { /* 回收失败不阻断本次结果 */ }
+    }
+    armIdleTimer();
   }
 }
 
 export { getBrowser, acquireSlot, releaseSlot };
+
+/** 观察口：当前单例引用（不触发启动；sidecar watchdog/漂移反馈读 Chrome 进程树用） */
+export function peekBrowser() {
+  return browser;
+}

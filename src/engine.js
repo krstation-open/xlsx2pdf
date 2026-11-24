@@ -2,17 +2,18 @@ import ExcelJS from 'exceljs';
 
 import zlib from 'node:zlib';
 
-import { flattenObject, getFileBuffer, parseCellMarkers, DEFAULT_MARKER_REGEX, DEFAULT_MARKER_SEPARATOR, validateMarkerRegex } from './utils.js';
+import { flattenObject, getFileBuffer, parseCellMarkers, DEFAULT_MARKER_REGEX, DEFAULT_MARKER_SEPARATOR, DEFAULT_MARKER_ALIASES, validateMarkerRegex } from './utils.js';
 import { formatValue } from './numfmt.js';
 import { PAPER_SIZE_MAP } from './constants.js';
 import { getSeams, hasCapability } from './seams.js';
+import { getConfig } from './browser.js';
 import {
   registerBuiltinMarkerTypes,
   resolveEffectivePlugins,
   lookupMarkerType,
   listMarkerTypes,
 } from './registry.js';
-import { imageLikeHandler } from './markers.js';
+import { imageLikeHandler, watermarkHandler } from './markers.js';
 import { normalizeImageSizes } from './image.js';
 import { resolveCoreMdw } from './mdw.js';
 import { xlsxError, isCodedError, throwIfAborted } from './errors.js';
@@ -339,8 +340,16 @@ export async function parseTemplateSkeleton(templateSource, option = {}) {
 
   // 扩展上下文：全局插件 + 调用级 option.plugins 合并（冲突时调用级覆盖）
   const effective = resolveEffectivePlugins(option.plugins);
-  // 标记解析器除内置类型外识别已注册的自定义类型 token
-  const knownTypes = listMarkerTypes(effective);
+  // 标记类型别名：调用级 option.markerAliases > 全局 configure > 内置默认（null 恢复内置）
+  const rawAliases = option.markerAliases !== undefined ? option.markerAliases : getConfig().markerAliases;
+  const baseAliases = rawAliases == null ? DEFAULT_MARKER_ALIASES : rawAliases;
+  // 插件注册的同名类型接管别名槽（不走别名映射，静默无告警；二开专属标记正常路径）
+  const aliases = {};
+  for (const [k, v] of Object.entries(baseAliases)) {
+    if (!effective.markerTypes.has(k)) aliases[k] = v;
+  }
+  // 标记解析器除内置类型外识别已注册的自定义类型 token 与生效别名 keys
+  const knownTypes = [...listMarkerTypes(effective), ...Object.keys(aliases)];
   // 标记语法：默认 ${...}；自定义正则先校验契约（g 标志 + 捕获组 1）再用
   const markerRegex = option.markerRegex || DEFAULT_MARKER_REGEX;
   if (markerRegex !== DEFAULT_MARKER_REGEX) validateMarkerRegex(markerRegex);
@@ -496,7 +505,7 @@ export async function parseTemplateSkeleton(templateSource, option = {}) {
 
     for (const cell of rowCells) {
       const cellText = displayCellText(cell);
-      const markers = parseCellMarkers(cellText, knownTypes, markerRegex, markerSeparator);
+      const markers = parseCellMarkers(cellText, knownTypes, markerRegex, markerSeparator, aliases);
 
       // 无标记 → 静态格：骨架期完成建模（autoInsertImage 依赖数据，留待填充期）
       if (markers.length === 0) {
@@ -713,7 +722,8 @@ export async function fillSkeleton(skeleton, data, option = {}) {
         // text 类标记：样式/下限逐段独立（单元格级下限归集见 pushSegments）
         const isTextLike = opt.type === 'text' || opt.type === '' || opt.type === undefined;
 
-        // 注册表查表：插件 handler > 内置 handler（text/image/img/barcode/qrcode/watermark）
+        // 注册表查表：插件 handler > 内置 handler（text/image/barcode/qrcode/watermark；
+        // 别名 token 已在解析期归一为规范名，插件接管别名槽时保持原 token 命中插件）
         const handler = lookupMarkerType(opt.type, effective);
         if (!handler) {
           // 理论不可达：解析器只识别已注册类型 token；防御性兜底按文本处理
@@ -803,7 +813,7 @@ export async function fillSkeleton(skeleton, data, option = {}) {
 
   // 5. 嵌入图片尺寸归一/压缩：商业版接缝（sharp 缩至显示尺寸 + 格式转换 + DPI 归一）优先；
   // 未注入时核心以纯 JS image-size 兜底归一（@96DPI、不压缩），保证未设宽高的图可见
-  if (seams.optimizeImages) await seams.optimizeImages(cells, skeleton.columnWidths, skeleton.rowHeights);
+  if (seams.optimizeImages) await seams.optimizeImages(cells, skeleton.columnWidths, skeleton.rowHeights, shared);
   else await normalizeImageSizes(cells);
 
   let model = {
@@ -1077,12 +1087,13 @@ function textHandler(value, option, ctx) {
   return value ?? '';
 }
 
-// 核心内置 text + image/img/barcode/qrcode（富媒体基础形态，社区版可用）；
-// watermark 等其余增强类型由商业版经内部注册表（xlsx2pdf/internal/registry）注入
+// 核心内置 text + image/barcode/qrcode/watermark（富媒体基础形态，社区版可用）；
+// img/print 历史别名经内置默认别名映射归一（markerAliases 可配）；
+// 其余增强能力（水印自适应/sharp 管线等）由商业版经内部接缝注入
 registerBuiltinMarkerTypes({
   text: textHandler,
   image: imageLikeHandler,
-  img: imageLikeHandler,
   barcode: imageLikeHandler,
   qrcode: imageLikeHandler,
+  watermark: watermarkHandler,
 });

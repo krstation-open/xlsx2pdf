@@ -31,9 +31,10 @@ try {
 | [`E_OPTION_INVALID`](#e_option_invalid)       | option / configure 值类型非法（含 `maxConcurrency` 非正整数、`signal` 非 AbortSignal） | 按提示传合法值                                 |
 | [`E_MARKER_REGEX`](#e_marker_regex)           | 自定义标记正则不合契约                                                                 | g 标志 + 捕获组 1                              |
 | [`E_MARKER_SEPARATOR`](#e_marker_separator)   | `markerSeparator` 为空或非字符串                                                       | 传非空字符串                                   |
-| [`E_MARKER_PRO`](#e_marker_pro)               | 模板使用未注册的 Pro 标记类型（watermark）                                             | 移除标记或升级 Pro                             |
-| [`E_SIZE_CAP`](#e_size_cap)                   | 模板体积超上限（默认 5MB）                                                             | 拆分模板 / 分批生成                            |
-| [`E_CELL_CAP`](#e_cell_cap)                   | 单元格数超上限（默认 20000）                                                           | 按业务分页拆分                                 |
+| [`E_MARKER_PRO`](#e_marker_pro)               | 模板使用未注册的 Pro 独占标记类型（当前无，机制保留）                              | 移除标记或升级 Pro                             |
+| [`E_MARKER_ALIAS`](#e_marker_alias)           | 内置默认别名（img/print）被禁用且未注册专属类型                                        | `use()` 注册该类型或恢复别名映射               |
+| [`E_SIZE_CAP`](#e_size_cap)                   | 模板体积超上限（默认 5MB，1.7.0 起可配）                                             | 拆分模板 / 分批生成                            |
+| [`E_CELL_CAP`](#e_cell_cap)                   | 单元格数超上限（默认 20000，1.7.0 起可配）                                           | 按业务分页拆分                                 |
 | [`E_PAPER_CUSTOM`](#e_paper_custom)           | 模板自定义纸张（代码 ≥256）且未显式指定尺寸                                            | `option.pageSize` 显式指定（自定义纸张属 Pro） |
 | [`E_PAPER_CODE`](#e_paper_code)               | 模板纸张代码不在支持列表                                                               | `option.pageSize` 显式指定                     |
 | [`E_PAPER_UNSUPPORTED`](#e_paper_unsupported) | `pageSize` 名称/对象无效                                                               | 传具名标准纸张                                 |
@@ -88,8 +89,8 @@ Pass a plain object; nested fields are addressed with dot paths.
 
 ### E_OPTION_PRO
 
-传入了商业版 Pro 专属参数：数组 `data`（批量多页）、对象型 `option.pageSize`（自定义纸张）、或 `fitToPage` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders` 等护栏/精调键。社区版显式报错引导，不静默降级。（`maxConcurrency` 自 1.4.0 已下放社区版，不再属 Pro 专属，见 `E_OPTION_INVALID`。）
-A Pro-only parameter was passed: array `data` (batch pages), object `option.pageSize` (custom paper), or guardrail/fine-tuning keys such as `fitToPage` / `scale` / `pageRotate` / `fontGuard` / `maxCells` / `maxTemplateSize` / `memoryGuard` / `emptyRowPlaceholders`. The community edition fails fast with guidance instead of silently degrading. (`maxConcurrency` is available in the community edition since 1.4.0 and is no longer Pro-only; see `E_OPTION_INVALID`.)
+传入了商业版 Pro 专属参数：数组 `data`（批量多页）、对象型 `option.pageSize`（自定义纸张）、或 `fitToPage` / `minFontSize` / `pageRotate` / `fontGuard` / `maxPages` / `memoryGuard` / `batchSize` 等护栏/精调键。社区版显式报错引导，不静默降级。（`maxConcurrency` 自 1.4.0、`scale` / `emptyRowPlaceholders` / `maxCells` / `maxTemplateSize` 自 1.7.0 已下放社区版，不再属 Pro 专属，见 `E_OPTION_INVALID`。）
+A Pro-only parameter was passed: array `data` (batch pages), object `option.pageSize` (custom paper), or guardrail/fine-tuning keys such as `fitToPage` / `minFontSize` / `pageRotate` / `fontGuard` / `maxPages` / `memoryGuard` / `batchSize`. The community edition fails fast with guidance instead of silently degrading. (`maxConcurrency` is available in the community edition since 1.4.0, and `scale` / `emptyRowPlaceholders` / `maxCells` / `maxTemplateSize` since 1.7.0; they are no longer Pro-only — see `E_OPTION_INVALID`.)
 
 **修复 / Fix**：移除该参数用社区版默认行为，或联系商业版咨询（报错文案内含邮箱）。
 Remove the parameter to use community defaults, or contact Pro sales (email included in the message).
@@ -108,8 +109,8 @@ Check the supported-key list in the message and the option table in the README.
 
 ### E_OPTION_INVALID
 
-option / configure 的值类型非法。社区版恒生效的校验：`maxConcurrency` 只接受正整数（0/负数/小数/非数值均拒绝，无「传 0 不限」语义）；`option.signal` 只接受 AbortSignal；其余如 `pageRotate` 非 boolean、`fontGuard` 不在策略列表等校验仅在 Pro 经接缝声明相应键后生效；纯社区版下这些键会更早被 `E_OPTION_PRO`（option）拦截或静默忽略（configure）。
-An option/configure value has an invalid type. Always enforced in the community edition: `maxConcurrency` accepts positive integers only (0 / negatives / fractions / non-numbers are rejected; there is no "0 = unlimited" semantics); `option.signal` accepts an AbortSignal only. Other checks (e.g. non-boolean `pageRotate`, `fontGuard` outside the strategy list) only apply after Pro declares the keys via seams; in the pure community edition such keys are intercepted earlier by `E_OPTION_PRO` (option) or silently ignored (configure).
+option / configure 的值类型非法。社区版恒生效的校验：`maxConcurrency` 只接受正整数（0/负数/小数/非数值均拒绝，无「传 0 不限」语义）；`option.signal` 只接受 AbortSignal；`emptyRowPlaceholders` 只接受字符串数组；`maxCells` / `maxTemplateSize` 只接受数值（0/负数=关闭）；生命周期四键（`browserIdleMs` / `browserMaxAgeMs` / `browserRecycleRenders` 非负整数，`protocolTimeoutMs` ≥1000 整数）；`onEvent` 只接受函数或 null；`markerAliases` 只接受对象或 null（禁规范名作键/alias→alias 链/目标未知）；其余如 `pageRotate` 非 boolean、`fontGuard` 不在策略列表等校验仅在 Pro 经接缝声明相应键后生效；纯社区版下这些键会更早被 `E_OPTION_PRO`（option）拦截或静默忽略（configure）。
+An option/configure value has an invalid type. Always enforced in the community edition: `maxConcurrency` accepts positive integers only (0 / negatives / fractions / non-numbers are rejected; there is no "0 = unlimited" semantics); `option.signal` accepts an AbortSignal only; `emptyRowPlaceholders` accepts an array of strings only; `maxCells` / `maxTemplateSize` accept numbers only (0/negative disables); the lifecycle keys (`browserIdleMs` / `browserMaxAgeMs` / `browserRecycleRenders` non-negative integers, `protocolTimeoutMs` integer >= 1000); `onEvent` accepts a function or null only; `markerAliases` accepts an object or null only (no canonical names as keys, no alias-to-alias chains, no unknown targets). Other checks (e.g. non-boolean `pageRotate`, `fontGuard` outside the strategy list) only apply after Pro declares the keys via seams; in the pure community edition such keys are intercepted earlier by `E_OPTION_PRO` (option) or silently ignored (configure).
 
 **修复 / Fix**：按报错提示的合法取值传参。
 Pass one of the accepted values listed in the message.
@@ -138,18 +139,28 @@ Pass a non-empty string, or omit it to use the default `|`.
 
 ### E_MARKER_PRO
 
-模板中使用了未注册的 Pro 标记类型（当前为 `watermark`；`image` / `img` / `barcode` / `qrcode` 自 1.1.0 已内置社区版）。
-The template uses an unregistered Pro marker type (currently `watermark`; `image` / `img` / `barcode` / `qrcode` are built into the community edition since 1.1.0).
+模板中使用了未注册的 Pro 独占标记类型。富媒体基础形态（`image` / `barcode` / `qrcode` 自 1.1.0，`watermark` 自 1.7.0，`img` / `print` 历史别名）均已内置社区版，当前无 Pro 独占标记类型；引导机制保留，未来 Pro 独占类型出现时未注册即报本码。
+The template uses an unregistered Pro-exclusive marker type. The rich-media basics (`image` / `barcode` / `qrcode` since 1.1.0, `watermark` since 1.7.0, with the `img` / `print` historical aliases) are all built into the community edition; there is currently no Pro-exclusive marker type. The guidance mechanism is kept for future Pro-exclusive types.
 
 **修复 / Fix**：移除该标记，或联系商业版咨询；也可经 `use()` 插件自行实现同名类型。
 Remove the marker, contact Pro sales, or implement the type yourself via a `use()` plugin.
+
+<a id="e_marker_alias"></a>
+
+### E_MARKER_ALIAS
+
+内置默认别名（`img` → `image`、`print` → `watermark`）被 `markerAliases` 禁用（传 `{}` 清空或替换式映射不含该键），且该 token 未被插件/内置注册为专属类型。显式报错而非静默降级文本：历史模板的水印/图片语义丢失不可接受（1.7.0 新增码）。
+A built-in default alias (`img` -> `image`, `print` -> `watermark`) was disabled via `markerAliases` (cleared with `{}` or absent from a replacement mapping), and the token is not registered as a dedicated type by a plugin or the built-ins. This fails explicitly instead of silently degrading to text: losing watermark/image semantics of legacy templates is unacceptable (new code in 1.7.0).
+
+**修复 / Fix**：二开专属标记经 `use()` 注册同名类型（接管别名槽，静默无告警）；或 `configure({ markerAliases: null })` 恢复内置默认别名；或在映射中显式保留该键（如 `{ print: 'watermark', seal: 'watermark' }`）。
+Register a dedicated type of the same name via `use()` (it takes over the alias slot silently); or restore the built-in defaults with `configure({ markerAliases: null })`; or keep the key explicitly in the mapping (e.g. `{ print: 'watermark', seal: 'watermark' }`).
 
 <a id="e_size_cap"></a>
 
 ### E_SIZE_CAP
 
-模板文件体积超过安全上限（社区版固定 5MB）。超大模板会让内存与产物成比例膨胀，单页渲染产物必被裁剪，早拒绝优于击穿服务。
-The template file exceeds the safety cap (fixed 5MB in the community edition). Oversized templates inflate memory and output proportionally; single-page output would be clipped, so failing early protects the service.
+模板文件体积超过安全上限（默认 5MB，1.7.0 起经 `maxTemplateSize` 可配，0/负数关闭）。超大模板会让内存与产物成比例膨胀，单页渲染产物必被裁剪，早拒绝优于击穿服务。
+The template file exceeds the safety cap (default 5MB, configurable via `maxTemplateSize` since 1.7.0, 0/negative disables). Oversized templates inflate memory and output proportionally; single-page output would be clipped, so failing early protects the service.
 
 **修复 / Fix**：精简模板（删除无关行列/嵌入对象），或按业务拆分数据分批生成。
 Slim the template (drop unused rows/columns/embedded objects) or split the data and generate in batches.
@@ -158,8 +169,8 @@ Slim the template (drop unused rows/columns/embedded objects) or split the data 
 
 ### E_CELL_CAP
 
-模板单元格数（行 × 列）超过安全上限（社区版固定 20000），含加载前预检与加载后实测两道守卫。
-The template cell count (rows × columns) exceeds the safety cap (fixed 20000 in the community edition); guarded both by a pre-load estimate and a post-load measurement.
+模板单元格数（行 × 列）超过安全上限（默认 20000，1.7.0 起经 `maxCells` 可配，0/负数关闭），含加载前预检与加载后实测两道守卫。
+The template cell count (rows × columns) exceeds the safety cap (default 20000, configurable via `maxCells` since 1.7.0, 0/negative disables); guarded both by a pre-load estimate and a post-load measurement.
 
 **修复 / Fix**：按业务分页拆分模板与数据，分批生成。
 Split the template and data by business pages and generate in batches.
