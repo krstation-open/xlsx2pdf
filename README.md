@@ -22,6 +22,7 @@ A Node.js server-side library that goes Excel template → marker substitution �
 - [What it's for](#what-for)
 - [Why xlsx2pdf](#why)
 - [Features (community edition)](#features)
+- [How it works](#mechanism)
 - [Detailed usage](#usage)
 - [Marker syntax](#markers)
 - [Community vs Pro](#compare)
@@ -128,6 +129,95 @@ We should also be clear about the community edition's limits: column widths foll
 - **Render event hook (since 1.7.0)**: `configure({ onEvent })` bridges stage timing, wire it to pino or any logger yourself — zero new dependencies in the library
 - **Extensible**: three extension points (marker types / field resolvers / model hooks), custom `markerRegex` / `markerSeparator`, configurable type aliases (`markerAliases`)
 - **Engineering**: ESM / CJS dual mode + TypeScript declarations, template-size / cell-count safety caps (parameterizable since 1.7.0, relaxation risk in [Deployment](#deploy)), stable error codes with bilingual messages, CLI (`xlsx2pdf convert`)
+
+↑ [Back to contents](#toc)
+
+---
+
+<a id="mechanism"></a>
+
+## How it works
+
+This section describes how the engine turns an xlsx into a PDF, focusing on the parts that most often cause layout drift: column widths, rich text, number formats, images and browser reuse. You don't need it for day-to-day use; come back when a layout looks off or a render behaves unexpectedly.
+
+### From template to PDF
+
+`excel2pdf` runs in five steps; everything independent of the data is done once:
+
+1. Get the template Buffer. `getFileBuffer` normalizes local paths, http(s) URLs, base64 (including Data URLs) and Buffers into a Buffer.
+2. Size guards. First the file size against `maxTemplateSize` (`E_SIZE_CAP`); then the first sheet's `<dimension>` declaration, falling back to streaming the row numbers. If the estimated cell count exceeds `maxCells`, the request is rejected before ExcelJS expands the file (`E_CELL_CAP`). The actual row × column count is checked again after loading.
+3. Build the skeleton. Parse merged ranges, row and column sizes, page setup and the workbook default font; extract per-cell styles, number formats and rich-text run boundaries. The result is independent of the data.
+4. Fill. Flatten the data into dot-path keys, replace markers cell by cell (including async image / barcode / watermark lookups), then normalize image sizes.
+5. Render and print. The model becomes an HTML document (`excel2html` stops here) and goes to headless Chrome's `page.pdf()`.
+
+Page setup follows per-call option > template pageSetup > Excel built-in defaults. A template that uses custom paper, or a paper code we can't resolve, with no paper specified via `option.pageSize`, throws instead of silently falling back to A4. A missing `data` renders one blank page from `[{}]`, which is handy for checking the layout first.
+
+### Markers and rich text in one cell
+
+Cell text goes through `parseCellMarkers`: `markerRegex` finds the markers, `markerSeparator` splits field, type and option. Cells without markers are modeled during the skeleton pass; cells with markers keep their parse artifacts, and the fill pass never reads the workbook again.
+
+When a cell mixes markers and static text, the engine splits it in marker order and emits `segments`:
+
+- replacement text inherits the local formatting of the run it lands in: bold, italic, underline, strike-through, color, size;
+- static text between markers is split at run boundaries, each part carrying its local style;
+- when the template only sets cell-level font and the runs carry no differences, `richTextSegStyles` returns null and rendering stays plain text, so the HTML is identical to the unsegmented output;
+- when segments exist, the renderer emits one `<span>` per segment. Underline is drawn with `border-bottom` across the whole cell by default; only when a segment explicitly cancels underline does it switch to per-segment `text-decoration` — otherwise the cell border would cover the cancellation.
+
+Font names and theme colors deliberately do not count as run differences, so font declarations don't interfere with size or theme-color resolution.
+
+### Column widths
+
+An Excel column width is measured in multiples of the pixel width of the digit `0` in the workbook's default font (MDW). The same character width is not the same number of pixels across fonts. The engine follows Excel's official formula:
+
+```text
+px = floor(((256 * width + floor(128 / MDW)) / 256) * MDW)
+```
+
+Below 1 character it switches to `round(width * MDW)`, continuous with the formula at 1. Columns without an explicit width are treated as 8.43 characters.
+
+MDW comes from the workbook default font. The community edition doesn't launch a browser; it uses a built-in heuristic table:
+
+| Font family | Size → MDW |
+| :--- | :--- |
+| SimSun / SimHei / KaiTi / FangSong | 9 / 11 / 12pt → 7 / 8 / 9 |
+| Microsoft YaHei | 9 / 10 / 11 / 12pt → 7 / 8 / 9 / 9 |
+| Western fonts | 9 / 10 / 11 / 12pt → 6 / 7 / 7 / 8 |
+
+Sizes outside the table are interpolated; with no default font the public constant 7 (Calibri 11) applies. YaHei is checked before the CJK families because it is not monospaced and its digits are wider than SimSun's; DengXian deliberately falls into the Western branch — its digit metrics match Calibri, so its default column width does too, and treating it as CJK would make columns too wide. Uncommon fonts are proportional estimates only; per-column browser measurement is a Pro capability.
+
+### Number formats
+
+The number format set on a template cell applies to the injected value, matching what Excel shows when you type the value in: `0.1234` with `0.00%` renders `12.34%`, `1234.5` with `¥#,##0.00` renders `¥1,234.50`.
+
+- A cell may carry a custom format string or a built-in numeric id (0~49); ids are mapped back to strings first. `General` and the text format `@` are not formatted.
+- The format string is split on semicolons into up to four sections (positive / negative / zero / text), chosen by the value's sign; semicolons inside quotes are not separators.
+- Numbers support `0` / `#` placeholders, thousands separators, trailing-comma scaling, percentages, currency symbols and quoted literals; dates support y/m/d/h/s tokens, 12-hour clocks and `[h]` elapsed time.
+- Fractions, scientific notation and similar rare formats are left as-is rather than guessed at, and never throw.
+
+There are two paths: static cells are formatted during modelling through `displayCellText`; marker cells put `cell.numFmt` into `ctx.numFmt`, and the text and watermark handlers format on replacement. Both paths share the same rules.
+
+### Images and other media
+
+`${photo|image}`, `${code|barcode}` and `${qr|qrcode}` share one resolver: the field value may be a local path, an http(s) URL or a base64 Data URL, and every form ends up as an inline Data URL, so printing makes no network requests.
+
+- Content is validated first: `image-size` must be able to read width and height, which means the magic bytes and structure are valid; the extension and response headers are not trusted. Corrupt or truncated images degrade to empty and are reported in `warnings` instead of failing the whole report.
+- With neither width nor height set, the original pixel size is used (96 DPI); with one side set, the other follows the aspect ratio. If parsing fails the historical 100×20 fallback keeps the image visible. The community edition only normalizes size; compression and DPI-aware conversion are Pro.
+- Barcodes and QR codes are generated with bwip-js, defaulting to 100×20.
+- Within one generation, the same value and size are resolved once; the cache stores the Promise, so concurrent lookups of the same value share one download or encode.
+
+Watermarks are overlays too, using the same `zindex` / `opacity` parameters; font size is inherited from the cell. Shrinking font size and wrapping watermarks to fit the layout is a Pro capability.
+
+### Concurrency and browser lifecycle
+
+Rendering concurrency is controlled by a semaphore, default 1:
+
+- Above the cap, requests queue; each queue entry carries its own cap, so a release wakes only the first entry whose cap allows it and leaves the rest queued. Once `runningPages` reaches zero any cap is admitted, so there is no deadlock.
+- With a `signal`, a queued request can be cancelled: it is removed from the queue and throws `E_CANCELLED` without taking a slot.
+- Cancellation during a render closes the tab and races the in-flight CDP call to return `E_CANCELLED` promptly.
+
+The browser is a process-level singleton. `getBrowser` uses a shared Promise to prevent concurrent launches; the `disconnected` handler checks the instance identity so an old instance's event cannot clear a newer one; `closeBrowser` holds a generation lock, concurrent closes share one Promise, and a render waits for an in-flight close before judging liveness.
+
+Idle reclaim is on by default: with nothing in flight and no activity past `browserIdleMs` (60 seconds), the singleton is closed; the timer is unref'd and never holds the process open. Render-count recycling and wall-clock age rotation are off by default, and when enabled they run only at a safe point — no in-flight renders and no launch in progress. The community edition has no memory admission guard: raising `maxConcurrency` grows Chrome memory linearly with open tabs, so leave the host enough headroom.
 
 ↑ [Back to contents](#toc)
 
@@ -809,7 +899,7 @@ configure({
 | `onEvent`         | `function \| null`          | `null`            | render event hook, see [Observability](#onevent); non-functions throw `E_OPTION_INVALID`   |
 | `markerAliases`   | `object \| null`            | `null` (built-in img/print) | type-alias mapping, whole-object replacement; `null` restores built-in, `{}` clears; per-call option wins |
 
-The community edition accepts these fourteen keys; the remaining guardrail keys (`memoryGuard` / `maxPages` / `fontGuard` / `pageRotate`) are accepted only after Pro declares them via seams — in the community edition they are silently ignored (see [Deployment](#deploy)); any other unknown keys are silently ignored too. `batchSize` is per-call option only; configure does not accept it in either edition. Validation rules: `maxConcurrency` takes positive integers only (0 / negatives / fractions / non-numbers throw `E_OPTION_INVALID`; there is no "0 = unlimited" semantics); the three lifecycle keys (browserIdleMs / browserRecycleRenders / browserMaxAgeMs) take non-negative integers (0 = off); `protocolTimeoutMs` takes integer ms ≥1000; the two size-guard keys take numbers only (0/negative = off).
+The community edition accepts these fourteen keys; the remaining guardrail keys (`memoryGuard` / `maxPages` / `fontGuard` / `pageRotate`) are accepted only after Pro declares them via seams — in the community edition they are silently ignored (see [Deployment](#deploy)); any other unknown keys are silently ignored too. `batchSize` is a Pro capability: the community edition rejects it in option and silently ignores it in configure, while Pro declares it via the seam so configure accepts it too. Validation rules: `maxConcurrency` takes positive integers only (0 / negatives / fractions / non-numbers throw `E_OPTION_INVALID`; there is no "0 = unlimited" semantics); the three lifecycle keys (browserIdleMs / browserRecycleRenders / browserMaxAgeMs) take non-negative integers (0 = off); `protocolTimeoutMs` takes integer ms ≥1000; the two size-guard keys take numbers only (0/negative = off).
 
 This differs from the option section on purpose: option is per-generation input, where Pro keys and mistyped unknown keys both raise an explicit error (fail fast + conversion guidance); configure is process-level configuration, where the community edition tolerantly ignores undeclared keys and falls back to the fixed caps. If you want a Pro guardrail key to be intercepted with an error, put it in option rather than configure.
 

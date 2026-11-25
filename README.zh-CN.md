@@ -22,6 +22,7 @@
 - [它适合做什么](#what-for)
 - [为什么用 xlsx2pdf](#why)
 - [特性（社区版）](#features)
+- [工作机制](#mechanism)
 - [详细用法](#usage)
 - [标记语法](#markers)
 - [社区版 vs Pro 版](#compare)
@@ -128,6 +129,95 @@ npx xlsx2pdf convert tpl.xlsx --data '{"name":"Alice"}' --out out.pdf
 - **渲染事件钩子（1.7.0 起）**：`configure({ onEvent })` 桥接阶段耗时计量，自行接 pino 等日志库，库零新增依赖
 - **可扩展**：标记类型、字段解析器、模型钩子三个扩展点，支持自定义 `markerRegex` / `markerSeparator`，类型别名可配置（`markerAliases`）
 - **工程化**：ESM / CJS 双模式 + TypeScript 声明，模板体积 / 单元格数安全上限（1.7.0 起可参数化，放宽风险见[部署](#deploy)），稳定错误码 + 双语报错，CLI（`xlsx2pdf convert`）
+
+↑ [返回目录](#toc)
+
+---
+
+<a id="mechanism"></a>
+
+## 工作机制
+
+这一节讲引擎内部怎么把 xlsx 变成 PDF，重点放在容易出偏差的环节：列宽、富文本、数字格式、图片和浏览器复用。日常使用不必先读完，遇到版式问题或排查渲染异常时对照着看。
+
+### 从模板到 PDF
+
+`excel2pdf` 的链路分五步，和数据无关的部分只做一次：
+
+1. 取模板 Buffer。`getFileBuffer` 把本地路径、http(s) URL、base64（含 Data URL）、Buffer 四种形态归一成 Buffer。
+2. 规模守卫。先按 `maxTemplateSize` 查文件体积，超限抛 `E_SIZE_CAP`；再读第一张工作表的 `<dimension>` 声明，没有声明时流式扫行号，估算单元格数超过 `maxCells` 就提前拒绝（`E_CELL_CAP`），不把明显超限的文件交给 ExcelJS 展开。加载后还会按实际行×列复核一次。
+3. 建模。解析合并区域、行列尺寸、页面设置和工作簿默认字体，逐格提取样式、数字格式与富文本 run 边界，得到一份与数据无关的骨架。
+4. 填充。data 先拍平成点路径键，再逐格替换标记；图片、条码、水印的异步取值也在这一步，替换完成后统一做图片尺寸归一。
+5. 渲染与打印。模型拼成 HTML 文档（`excel2html` 停在这里），交给无头 Chrome 的 `page.pdf()` 出片。
+
+页面设置按「调用级 option > 模板 pageSetup > Excel 内建默认」解析。模板用了自定义纸张或无法识别的纸张代码、调用方又没有用 `option.pageSize` 指定纸张时直接抛错，不会静默回退 A4。`data` 缺省时按 `[{}]` 渲染一页空模板，方便先验证版式。
+
+### 单元格里的标记与富文本
+
+单元格文本先交给 `parseCellMarkers`：按 `markerRegex` 找出标记，按 `markerSeparator` 拆出字段、类型和 option。没有标记的格子在建模阶段就生成完整模型；有标记的格子只记录解析件，填充阶段不再回头读 workbook。
+
+一个格子里混排多个标记与静态文本时，引擎按标记出现顺序切段，输出 `segments`：
+
+- 替换出来的文本继承标记所在 run 的局部格式，包括加粗、斜体、下划线、删除线、字色和字号；
+- 标记之间的静态文本按 run 边界切开，各自携带局部样式；
+- 模板只设置了单元格级字体、各 run 没有差异时，`richTextSegStyles` 返回 null，保持纯文本输出，HTML 与不启用分段时一致；
+- 有分段时渲染层逐段输出 `<span>`。下划线默认用 `border-bottom` 占满单元格；只有某一段显式取消下划线时，才改由段级 `text-decoration` 输出，否则取消会被单元格边框盖住。
+
+字体名和主题色有意不参与 run 差异判定，避免字体声明差异干扰字号与主题色解析。
+
+### 列宽换算
+
+Excel 的列宽单位是「工作簿默认字体下数字 0 的像素宽」（MDW），同样写 8.43 的列，在不同默认字体下像素宽并不相同。引擎按 Excel 官方公式换算：
+
+```text
+px = floor(((256 * width + floor(128 / MDW)) / 256) * MDW)
+```
+
+宽度小于 1 字符时改用 `round(width * MDW)` 线性插值，在 1 字符处与公式连续；没有显式设置宽度的列按 8.43 字符计算。
+
+MDW 由工作簿默认字体决定。社区版不启动浏览器，用内置启发式表推算：
+
+| 字体族 | 字号与 MDW |
+| :--- | :--- |
+| 宋体 / 黑体 / 楷体 / 仿宋 | 9 / 11 / 12pt → 7 / 8 / 9 |
+| 微软雅黑 | 9 / 10 / 11 / 12pt → 7 / 8 / 9 / 9 |
+| 西文字体 | 9 / 10 / 11 / 12pt → 6 / 7 / 7 / 8 |
+
+表外字号按比例推算，默认字体缺失时用公开常数 7（Calibri 11）。雅黑先于中文字体判定，因为它非等宽、数字比宋体宽；等线（DengXian）有意走西文分支，它的数字度量与 Calibri 同源，默认列宽也一致，归进中文表反而偏宽。冷门字体只能按比例估算，需要逐列实测校正的场景由 Pro 处理。
+
+### 数字格式继承
+
+模板给单元格设的数字格式会应用到注入的值上，和在 Excel 里直接填值看到的一致：`0.1234` 配 `0.00%` 输出 `12.34%`，`1234.5` 配 `¥#,##0.00` 输出 `¥1,234.50`。
+
+- 单元格里的格式可能是自定义字符串，也可能是内置格式的数字 id（0~49），引擎先把 id 映射回格式串；`General` 和文本格式 `@` 不参与格式化。
+- 格式串按分号拆成最多四节（正 / 负 / 零 / 文本），按值的符号选节，引号内的分号不拆。
+- 数值支持 `0` / `#` 占位、千分位、尾部逗号缩放、百分比、货币符号和引号字面量；日期支持 y/m/d/h/s token、12 小时制与 `[h]` 历时。
+- 分数、科学计数这类冷门格式不做猜测，兜底按原值输出，不抛错。
+
+实现上分两条链路：静态格在建模时由 `displayCellText` 直接格式化；标记格把 `cell.numFmt` 放进 `ctx.numFmt`，由 text 和 watermark handler 在替换时格式化，同一套规则对两类格都生效。
+
+### 图片与富媒体
+
+`${photo|image}`、`${code|barcode}`、`${qr|qrcode}` 共用一套解析：字段值可以是本地路径、http(s) URL 或 base64 Data URL，最终都转成 Data URL 内联进 HTML，打印时不发网络请求。
+
+- 取到的内容先做校验：`image-size` 能解析出宽高才认为魔数与结构有效，不盲信扩展名和响应头。损坏或截断的图片按空值处理并写入 `warnings`，不会让整份报表失败。
+- 宽高都没设时按原图像素归一（96 DPI），只设一边时另一边按原图比例；解析失败兜底 100×20，避免 0×0 的图看不见。社区版只做尺寸归一，不做压缩与 DPI 感知转换。
+- 条码和二维码由 bwip-js 生成，缺省 100×20。
+- 同一次生成里，相同的值加相同的尺寸只解析一次，缓存的是 Promise，并发取同一个值共享同一次下载或编码。
+
+水印同样走浮层，`zindex` / `opacity` 参数与图片一致，字号继承单元格；水印随版面自动收敛字号和换行属于 Pro 能力。
+
+### 并发与浏览器生命周期
+
+渲染并发由信号量控制，默认 1：
+
+- 超过上限时请求进入队列，队列条目带着自己的上限；释放槽位时只唤醒第一个满足条件的请求，其余留队，`runningPages` 归零后任何上限都放行，不会死锁。
+- 排队时传了 `signal` 可以取消：abort 后从队列摘除并抛 `E_CANCELLED`，不占槽位。
+- 渲染中取消会关闭标签页，并与在途 CDP 调用竞速，尽量及时返回 `E_CANCELLED`。
+
+浏览器是进程级单例。`getBrowser` 用共享 Promise 防并发重复 launch；`disconnected` 事件按实例身份判定，旧实例的断开事件不会误清新实例；`closeBrowser` 有代际锁，并发关闭复用同一个 Promise，渲染开始前会等关闭完成再判活。
+
+空闲回收默认开启：没有在途渲染且空闲超过 `browserIdleMs`（60 秒）就关闭单例，定时器 unref，不阻止进程退出。渲染计数回收和墙钟年龄轮换默认关闭，达到阈值后只在无在途渲染、无启动中实例的安全点执行。社区版没有内存准入，调大 `maxConcurrency` 后 Chrome 内存随标签页数线性增长，宿主服务要留够余量。
 
 ↑ [返回目录](#toc)
 
@@ -809,7 +899,7 @@ configure({
 | `onEvent`         | `function \| null` | `null`        | 渲染事件钩子，见[可观测性](#onevent)；非函数抛 `E_OPTION_INVALID`     |
 | `markerAliases`   | `object \| null`   | `null`（内置 img/print） | 类型别名映射，整体替换；`null` 恢复内置、`{}` 清空；调用级 option 优先 |
 
-社区版接受以上十四键；`memoryGuard` / `maxPages` / `fontGuard` / `pageRotate` 等其余护栏键须由 Pro 经接缝声明后才接受，社区版传入静默忽略（见[部署](#deploy)），其余未知键也同样静默忽略。`batchSize` 只走调用级 option，configure 两版均不接受。校验口径：`maxConcurrency` 只接受正整数（0/负数/小数/非数值抛 `E_OPTION_INVALID`，无「传 0 不限」语义）；生命周期三键（browserIdleMs / browserRecycleRenders / browserMaxAgeMs）只接受非负整数（0 关闭）；`protocolTimeoutMs` 只接受 ≥1000 的整数毫秒；规模守卫两键只接受数值（0/负数关闭）。
+社区版接受以上十四键；`memoryGuard` / `maxPages` / `fontGuard` / `pageRotate` 等其余护栏键须由 Pro 经接缝声明后才接受，社区版传入静默忽略（见[部署](#deploy)），其余未知键也同样静默忽略。`batchSize` 属 Pro 能力：社区版在 option 传入即报错、configure 静默忽略；Pro 经接缝声明后 configure 也接受。校验口径：`maxConcurrency` 只接受正整数（0/负数/小数/非数值抛 `E_OPTION_INVALID`，无「传 0 不限」语义）；生命周期三键（browserIdleMs / browserRecycleRenders / browserMaxAgeMs）只接受非负整数（0 关闭）；`protocolTimeoutMs` 只接受 ≥1000 的整数毫秒；规模守卫两键只接受数值（0/负数关闭）。
 
 这与 option 段的行为不同，是有意为之：option 是单次生成的入参，Pro 键与拼错的未知键都显式报错（快速失败 + 转化引导）；configure 是进程级配置，社区版对未声明的键宽容忽略、固定上限兜底。想让某个 Pro 护栏键被拦截报错，请放进 option 而非 configure。
 
