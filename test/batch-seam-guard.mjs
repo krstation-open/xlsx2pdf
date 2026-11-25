@@ -10,6 +10,7 @@
  *  ② HTML 工厂惰性：准入未放行前工厂不执行；放行后才拼装并出片
  *  ③ 已 abort 的请求不进准入、工厂不执行（E_CANCELLED）
  *  ④ 社区版 1.7.0 起接受 browserRecycleRenders（非负整数，默认 0 关闭）
+ *  ⑤ 并发批乱序完成时合并输入仍按批索引排序（旧实现 push 完成序 → 页序错乱）
  *
  * 运行：node test/batch-seam-guard.mjs
  */
@@ -43,7 +44,7 @@ const tpl = await makeTpl();
 const pageData = (i) => ({ tag: `P${i}` });
 
 const seams = getSeams();
-const orig = { memoryAdmit: seams.memoryAdmit, mergePdf: seams.mergePdf };
+const orig = { memoryAdmit: seams.memoryAdmit, mergePdf: seams.mergePdf, renderBackend: seams.renderBackend };
 
 try {
   // ---------- ① pageCount 逐批 / 单文档传参 ----------
@@ -102,10 +103,35 @@ try {
   assert.strictEqual(getConfig().browserRecycleRenders, 0, '默认 0 关闭不变');
   console.log('[④] PASS: 回收键社区版可配（1.7.0），默认 0 关闭');
 
+  // ---------- ⑤ 并发批乱序完成：合并输入按批索引排序 ----------
+  // 旧实现 buffers.push(完成序)：并发批乱序完成时合并出的 PDF 页序与 data 不一致
+  // （内容正确、页序错乱，肉眼难以发现；sidecar/多批并发下必现）
+  const order = [];
+  const done = [];
+  seams.mergePdf = async (buffers) => Buffer.from(buffers.map((b) => b.toString()).join('|'));
+  seams.renderBackend = async (htmlStr) => {
+    const m = /PX(\d+)/.exec(htmlStr);          // 批内首个页面标记 = 该批起始页
+    const start = m ? Number(m[1]) : -1;
+    order.push(start);
+    await delay(80 - start * 3);                // 越靠后的批越早完成，制造乱序
+    done.push(start);                           // 记录**完成**序（乱序证据）
+    return { buffer: Buffer.from(`PX${start}`), warnings: [] };
+  };
+  const merged = await excel2pdf({
+    template: tpl,
+    data: Array.from({ length: 25 }, (_, i) => ({ tag: `PX${i}` })),
+    option: { batchSize: 10 },
+  });
+  assert.notDeepStrictEqual(done, [0, 10, 20], '用例前提：完成序应与批序不同（否则断言无意义）');
+  assert.deepStrictEqual([...order].sort((a, b) => a - b), [0, 10, 20], '三批应并发提交（提交序 = 批序）');
+  assert.strictEqual(merged.pdf.toString(), 'PX0|PX10|PX20', '合并输入须按批索引排序，不得按完成序');
+  console.log('[⑤] PASS: 并发批乱序完成 → 合并输入仍按批索引有序');
+
   console.log('[batch-seam-guard] ALL PASS ✅');
 } finally {
   seams.memoryAdmit = orig.memoryAdmit;
   seams.mergePdf = orig.mergePdf;
+  seams.renderBackend = orig.renderBackend;
   seams.capabilities.delete('arrayData');
   configure({ browserRecycleRenders: 0 });
   await closeBrowser();

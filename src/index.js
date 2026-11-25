@@ -438,8 +438,10 @@ async function generatePdf({ template, data, option, seams, pageRotate, t0 }) {
       });
       emit('render', { ms: Date.now() - tR, pages: batch.length, bytes: rendered.buffer.length, batch: bi, batches: batches.length });
       batchWarnings[bi] = rendered.warnings;
-      // 按批序入收集器（Promise.all 完成序不确定，页序靠索引保）
-      if (store) store.add(rendered.buffer, bi); else buffers.push(rendered.buffer);
+      // 按批序入收集器（Promise.all 完成序不确定，页序靠索引保）；
+      // 内存数组同样按索引落位，否则 push 得到的是完成序、合并后页序错乱；
+      // add 允许返回 Promise（磁盘 spill 异步写），此处 await 保证合并前数据就位
+      if (store) await store.add(rendered.buffer, bi); else buffers[bi] = rendered.buffer;
     }));
     // 告警按批序聚合（Promise.all 完成序不确定，不直接 push 避免告警顺序漂移）
     for (const w of batchWarnings) warnings.push(...(w || []));

@@ -111,6 +111,14 @@ const config = {
   templateCacheMB: 0,
   /** 批产物磁盘 spill 阈值 MB：累计批 PDF 超阈即落盘（0 关闭；商业版消费） */
   spillThresholdMB: 0,
+  /** sidecar 准入队列上限（0 = 自动：4×maxConcurrency 且不低于 16；商业版消费） */
+  maxAdmitQueue: 0,
+  /** merge 线程池大小（-1 = 自动；0 = 关闭走主线程；n>0 = 固定池；商业版消费） */
+  mergeWorkers: -1,
+  /** merge 队列上限（0 = 不排队，溢出直接主线程降级；商业版消费） */
+  mergeQueueMax: 8,
+  /** merge 排队等待上限 ms（超时同样主线程降级；商业版消费） */
+  mergeWaitMs: 60000,
   /** 渲染事件钩子（社区版可观测性入口；null 关闭；钩子异常不击穿渲染） */
   onEvent: null,
   /** 标记类型别名映射（null = 内置默认 img/print；对象整体替换，{} 清空；调用级 option.markerAliases 优先） */
@@ -331,6 +339,37 @@ export function configure(option = {}) {
         `configure({ guardMode }) accepts auto / local / sidecar only, received: ${JSON.stringify(option.guardMode)}.`);
     }
     config.guardMode = option.guardMode;
+  }
+  // 并发预算参数化（商业版声明后接受）：准入队列上限 / merge 池规模与排队预算。
+  // mergeWorkers 允许 -1（自动），其余均为非负整数（0 关闭/不排队）
+  if (accepted.has('maxAdmitQueue') && option.maxAdmitQueue !== undefined) {
+    const v = option.maxAdmitQueue;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] configure({ maxAdmitQueue }) 只接受非负整数（0 自动），收到：${JSON.stringify(v)}`,
+        `configure({ maxAdmitQueue }) accepts a non-negative integer only (0 = auto), received: ${JSON.stringify(v)}.`);
+    }
+    config.maxAdmitQueue = v;
+  }
+  if (accepted.has('mergeWorkers') && option.mergeWorkers !== undefined) {
+    const v = option.mergeWorkers;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < -1) {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] configure({ mergeWorkers }) 只接受 ≥ -1 的整数（-1 自动 / 0 关闭），收到：${JSON.stringify(v)}`,
+        `configure({ mergeWorkers }) accepts an integer >= -1 only (-1 = auto, 0 = off), received: ${JSON.stringify(v)}.`);
+    }
+    config.mergeWorkers = v;
+  }
+  for (const key of ['mergeQueueMax', 'mergeWaitMs']) {
+    if (accepted.has(key) && option[key] !== undefined) {
+      const v = option[key];
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+        throw xlsxError('E_OPTION_INVALID',
+          `[xlsx2pdf] configure({ ${key} }) 只接受非负整数，收到：${JSON.stringify(v)}`,
+          `configure({ ${key} }) accepts a non-negative integer only, received: ${JSON.stringify(v)}.`);
+      }
+      config[key] = v;
+    }
   }
   return {
     ...config,

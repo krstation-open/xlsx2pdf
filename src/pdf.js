@@ -14,6 +14,8 @@ import { xlsxError, isCodedError, cancelledError, throwIfAborted } from './error
 /** @type {import('puppeteer-core').Browser|null} */
 let browser = null;
 let launchPromise = null;
+/** 关闭进行中的 promise（代际锁：关闭期间 getBrowser 必须等待，不得返回正在关闭的实例） */
+let closingPromise = null;
 /** 本次浏览器实例生命周期内已完成的渲染槽位数（browserRecycleRenders 回收计数） */
 let rendersSinceLaunch = 0;
 /** 当前实例冷启动完成时刻（browserMaxAgeMs 墙钟年龄轮换） */
@@ -71,6 +73,11 @@ function launchError(err, executablePath) {
  * @returns {Promise<import('puppeteer-core').Browser>}
  */
 async function getBrowser() {
+  // 关闭进行中：等关闭落地再判活，否则 isConnected() 在 close 完成前仍为 true，
+  // 会把正在关闭的实例交给渲染（Target closed 的直接来源）
+  if (closingPromise) {
+    try { await closingPromise; } catch (_) { /* 关闭失败不阻断重建 */ }
+  }
   if (browser && browser.isConnected()) {
     return browser;
   }
@@ -129,19 +136,24 @@ async function getBrowser() {
  * 手动关闭浏览器（通常在进程退出时调用）
  */
 export async function closeBrowser() {
-  // 先等在途冷启动落地再关：否则置空 launchPromise 会让并发 getBrowser 再 launch
-  // 一个 Chrome，先完成的实例被覆盖引用成孤儿（B1 竞态）
-  if (launchPromise) {
-    try { await launchPromise; } catch (_) { /* 启动失败本就无实例可关 */ }
-  }
-  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-  if (browser) {
-    try {
-      await browser.close();
-    } catch (_) { /* ignore */ }
-    browser = null;
-  }
-  launchPromise = null;
+  // 代际锁：并发关闭复用同一 promise（sidecar 多批次同时遇瞬态错误时不得重复关池）
+  if (closingPromise) return closingPromise;
+  closingPromise = (async () => {
+    // 先等在途冷启动落地再关：否则置空 launchPromise 会让并发 getBrowser 再 launch
+    // 一个 Chrome，先完成的实例被覆盖引用成孤儿（B1 竞态）
+    if (launchPromise) {
+      try { await launchPromise; } catch (_) { /* 启动失败本就无实例可关 */ }
+    }
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (_) { /* ignore */ }
+      browser = null;
+    }
+    launchPromise = null;
+  })().finally(() => { closingPromise = null; });
+  return closingPromise;
 }
 
 // ============================================================

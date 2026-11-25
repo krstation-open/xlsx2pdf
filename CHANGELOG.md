@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+### Documentation
+
+- README (zh-CN / EN) gains a "How it works" chapter: the five-step template → PDF pipeline and its guards, marker segmentation and rich-text inheritance, Excel's MDW column-width formula with the built-in heuristic tables, numFmt resolution for static and marker cells, image validation / normalization / caching, and the render semaphore with browser lifecycle.
+- Corrected the `batchSize` wording: it is a Pro capability — the community edition rejects it in option and silently ignores it in configure, while Pro declares it via the seam so configure accepts it too.
+- Documented that column widths use the community `resolveCoreMdw` heuristics (CJK / YaHei / Western tables plus the constant 7); browser-measured per-column correction stays Pro.
+- Refreshed the CONTRIBUTING scope section: rich-media basics, scale, empty-row placeholders, parameterized size guards, browser lifecycle, `onEvent` and the three extension points are now listed as community capabilities; the Pro list names only what still requires the commercial edition.
+
+## [1.7.1] - 2026-11-25
+
+### Fixed
+
+- `closeBrowser()` now holds a close generation lock: concurrent calls share one promise, and `getBrowser()` waits for an in-flight close before judging liveness. Previously `browser.isConnected()` still returned true while the browser was closing, so a render starting in that window was handed an instance that was about to disappear (a direct source of `Target closed`).
+- Batch output ordering: the in-memory batch array is now filled by batch index instead of `push` (completion order), so `merge` sees the original page order even when no batch store is registered.
+
+### Added
+
+- Configure keys reserved for the commercial edition's concurrency budget: `maxAdmitQueue` (sidecar admission queue cap, 0 = auto), `mergeWorkers` (-1 auto / 0 off / n fixed pool), `mergeQueueMax`, `mergeWaitMs`. Declared via the seam like the other guardrail keys; the community edition keeps ignoring them.
+- `seams.createBatchStore().add()` may return a Promise (asynchronous disk spill); the core awaits it before merging.
+
 ## [1.7.0] - 2026-11-24
 
 ### Added
