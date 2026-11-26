@@ -3,19 +3,25 @@
 All notable changes to **xlsx2pdf** (community edition) are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.7.2] - 2026-11-26
+
+### Security
+
+- Image Data URLs are validated strictly now (`data:image/*;base64,` plus a base64 charset check), decoded for a magic-byte / size check and re-encoded before use. The previous `Buffer.from(str, 'base64')` silently dropped trailing junk, so a valid image prefix followed by `" onerror="...` passed the content check and was then written verbatim into `<img src>`. A malformed value degrades to an empty image.
+- `<img src>` values are attribute-escaped, and colors / alignments go through whitelists. Colors accept only 6-digit `RRGGBB` or 8-digit `AARRGGBB` (this also fixes 6-digit values starting with `FF` being truncated as ARGB); horizontal / vertical alignment accept only valid CSS values and fall back to the historical defaults. Excel's `distributed` / `justify` map to `middle` so their visual result does not change.
+- Generated documents carry a CSP meta tag: `connect-src 'none'`, `object-src 'none'`, `base-uri 'none'`, `form-action 'none'`; images, fonts, inline styles and inline scripts stay allowed because layout and measurement depend on them.
+- Zip entries are inflated with a 64MB output cap; an oversized or malformed entry is treated as unreadable instead of exhausting the heap.
 
 ### Added
 
 - `configure({ browserSandbox: true })` keeps the Chromium sandbox. The launch args used to hardcode `--no-sandbox` / `--disable-setuid-sandbox`, which is required inside containers running as root but leaves no way to narrow the surface for a hardened deployment. The default stays off (same behavior as before); turn it on when running as non-root with user namespaces available.
+- `seams.afterTemplateLoad` runs after the workbook is parsed with the measured heap / RSS deltas, so a caller can re-check the load cost before rendering.
 - `npm run test:security` (`test/security-injection.mjs`): locks the data-plane defenses (strict data URL + re-encode, `<img src>` attribute escaping, color / alignment whitelists, CSP meta) on both `src` and the built `dist` via a real template export.
 
-### Documentation
+### Changed
 
-- README (zh-CN / EN) gains a "How it works" chapter: the five-step template → PDF pipeline and its guards, marker segmentation and rich-text inheritance, Excel's MDW column-width formula with the built-in heuristic tables, numFmt resolution for static and marker cells, image validation / normalization / caching, and the render semaphore with browser lifecycle.
-- Corrected the `batchSize` wording: it is a Pro capability — the community edition rejects it in option and silently ignores it in configure, while Pro declares it via the seam so configure accepts it too.
-- Documented that column widths use the community `resolveCoreMdw` heuristics (CJK / YaHei / Western tables plus the constant 7); browser-measured per-column correction stays Pro.
-- Refreshed the CONTRIBUTING scope section: rich-media basics, scale, empty-row placeholders, parameterized size guards, browser lifecycle, `onEvent` and the three extension points are now listed as community capabilities; the Pro list names only what still requires the commercial edition.
+- Page filling and fragment assembly yield to the event loop periodically. Long synchronous stretches on large page counts used to postpone abort timers and heartbeat leases.
+- Batch outputs are disposed on failure too: when a batch render rejects or the merge throws, the spill directory is now cleaned in `finally` instead of staying until process exit.
 
 ## [1.7.1] - 2026-11-25
 
@@ -28,6 +34,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 - Configure keys reserved for the commercial edition's concurrency budget: `maxAdmitQueue` (sidecar admission queue cap, 0 = auto), `mergeWorkers` (-1 auto / 0 off / n fixed pool), `mergeQueueMax`, `mergeWaitMs`. Declared via the seam like the other guardrail keys; the community edition keeps ignoring them.
 - `seams.createBatchStore().add()` may return a Promise (asynchronous disk spill); the core awaits it before merging.
+
+### Documentation
+
+- README (zh-CN / EN) gains a "How it works" chapter: the five-step template → PDF pipeline and its guards, marker segmentation and rich-text inheritance, Excel's MDW column-width formula with the built-in heuristic tables, numFmt resolution for static and marker cells, image validation / normalization / caching, and the render semaphore with browser lifecycle.
+- Corrected the `batchSize` wording: it is a Pro capability — the community edition rejects it in option and silently ignores it in configure, while Pro declares it via the seam so configure accepts it too.
+- Documented that column widths use the community `resolveCoreMdw` heuristics (CJK / YaHei / Western tables plus the constant 7); browser-measured per-column correction stays Pro.
+- Refreshed the CONTRIBUTING scope section: rich-media basics, scale, empty-row placeholders, parameterized size guards, browser lifecycle, `onEvent` and the three extension points are now listed as community capabilities; the Pro list names only what still requires the commercial edition.
 
 ## [1.7.0] - 2026-11-24
 
@@ -199,6 +212,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 - Initial open-source community baseline: Excel-template marker substitution, nested dot paths, marker defaults, in-cell multi-marker mixing with local rich-text inheritance, style fidelity (merged cells / fonts / colors / borders), automatic numFmt inheritance, standard paper & page setup, bundled headless Chrome, `excel2html`, three extension points (`use` / `option.plugins`), custom marker syntax, ESM/CJS dual mode + TypeScript declarations, template-size / cell-count safety caps.
 
+[1.7.2]: https://github.com/krstation-open/xlsx2pdf/tree/v1.7.2
+[1.7.1]: https://github.com/krstation-open/xlsx2pdf/tree/v1.7.1
 [1.7.0]: https://github.com/krstation-open/xlsx2pdf/tree/v1.7.0
 [1.6.3]: https://github.com/krstation-open/xlsx2pdf/tree/v1.6.3
 [1.6.2]: https://github.com/krstation-open/xlsx2pdf/tree/v1.6.2
