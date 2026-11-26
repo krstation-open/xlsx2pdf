@@ -24,6 +24,12 @@ const seams = {
   autoInsertImage: null,
   /** async (cells, columnWidths, rowHeights) => void：嵌入图片压缩管线；缺省不处理 */
   optimizeImages: null,
+  /** async (ctx {bytes,heapDeltaMB,rssDeltaMB}) => void：模板加载完成后的实测内存复核。
+   *  ExcelJS 的堆放大由模板内部结构（样式/富文本/公式）决定，加载前无法预测——
+   *  实测 2.7MB/2 万格几乎零增量、20.8MB/18 万格要 541MB，同一套规模守卫下差出无穷倍。
+   *  加载完成是唯一能测准的时刻，且此时只有模型在堆里、Chrome 尚未启动，拒绝的代价
+   *  只是一次解析。超预算由商业版抛 E_MEMORY，核心原样上抛；缺省 null 不复核。 */
+  afterTemplateLoad: null,
 
   // —— 渲染脚本接缝（缺省空串 = 不注入任何脚本，超页走浏览器原生分页） ——
   /** () => string：多页共用函数源单次注入（head）；缺省 null（逐页内联全量源码） */

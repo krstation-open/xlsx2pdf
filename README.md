@@ -867,6 +867,7 @@ import { configure } from 'xlsx2pdf';
 configure({
   browserPath: '/usr/bin/chromium', // external browser (over bundled and XLSX2PDF_BROWSER_PATH)
   headless: 'new', // default 'new'
+  browserSandbox: false, // default false (passes --no-sandbox, required in containers/root); set true when running as non-root with user namespaces
   launchArgs: ['--proxy-server=...'], // extra launch args
   markerRegex: /\{\{([^}]+)\}\}/g, // global marker syntax (null restores built-in ${...})
   markerSeparator: '::', // global internal separator (null restores vertical bar)
@@ -886,6 +887,7 @@ configure({
 | :---------------- | :-------------------------- | :---------------- | :------------------------------------------------------------------------------------------------------------- |
 | `browserPath`     | `string`                    | none              | external browser executable path, over bundled and env var                                                     |
 | `headless`        | `boolean \| 'new'`          | `'new'`           | puppeteer headless mode                                                                                        |
+| `browserSandbox`  | `boolean`                   | `false`           | keep the Chromium sandbox; off by default because containers/root cannot run it                                |
 | `launchArgs`      | `string[]`                  | `[]`              | extra browser launch args                                                                                      |
 | `markerRegex`     | `RegExp \| null`            | built-in `${...}` | global marker syntax, per-call option wins; `null` restores built-in                                           |
 | `markerSeparator` | `string \| null`            | `'\|'`            | global internal separator, per-call wins; `null` restores default                                              |

@@ -11,6 +11,7 @@
  *  ③ 已 abort 的请求不进准入、工厂不执行（E_CANCELLED）
  *  ④ 社区版 1.7.0 起接受 browserRecycleRenders（非负整数，默认 0 关闭）
  *  ⑤ 并发批乱序完成时合并输入仍按批索引排序（旧实现 push 完成序 → 页序错乱）
+ *  ⑥ 合并抛错时批产物收集器仍被 dispose（旧实现只在成功路径清，落盘目录留到进程退出）
  *
  * 运行：node test/batch-seam-guard.mjs
  */
@@ -44,7 +45,7 @@ const tpl = await makeTpl();
 const pageData = (i) => ({ tag: `P${i}` });
 
 const seams = getSeams();
-const orig = { memoryAdmit: seams.memoryAdmit, mergePdf: seams.mergePdf, renderBackend: seams.renderBackend };
+const orig = { memoryAdmit: seams.memoryAdmit, mergePdf: seams.mergePdf, renderBackend: seams.renderBackend, createBatchStore: seams.createBatchStore };
 
 try {
   // ---------- ① pageCount 逐批 / 单文档传参 ----------
@@ -127,11 +128,35 @@ try {
   assert.strictEqual(merged.pdf.toString(), 'PX0|PX10|PX20', '合并输入须按批索引排序，不得按完成序');
   console.log('[⑤] PASS: 并发批乱序完成 → 合并输入仍按批索引有序');
 
+  // ---------- ⑥ 合并抛错：批产物收集器仍须 dispose ----------
+  // abort / 某批渲染失败 / 合并抛错时若不 dispose，已落盘的批产物目录会留到进程退出
+  // （Buffer 随闭包被 GC，目录不会），临时分区会越跑越满
+  let disposed = 0;
+  seams.createBatchStore = () => ({
+    add: async () => { },
+    source: () => ({ count: 3, read: async () => Buffer.from('x') }),
+    dispose: async () => { disposed += 1; },
+  });
+  seams.renderBackend = async (htmlStr) => ({ buffer: Buffer.from(String(htmlStr).slice(0, 16)), warnings: [] });
+  seams.mergePdf = async () => { throw new Error('merge boom'); };
+  await assert.rejects(
+    () => excel2pdf({
+      template: tpl,
+      data: Array.from({ length: 25 }, (_, i) => ({ tag: `PM${i}` })),
+      option: { batchSize: 10 },
+    }),
+    (e) => /merge boom/.test(e.message),
+    '合并失败应向上抛出原错（不得被清理逻辑吞掉）',
+  );
+  assert.strictEqual(disposed, 1, '合并抛错后收集器必须被 dispose（且只一次）');
+  console.log('[⑥] PASS: 合并失败时批产物收集器仍被清理');
+
   console.log('[batch-seam-guard] ALL PASS ✅');
 } finally {
   seams.memoryAdmit = orig.memoryAdmit;
   seams.mergePdf = orig.mergePdf;
   seams.renderBackend = orig.renderBackend;
+  seams.createBatchStore = orig.createBatchStore;
   seams.capabilities.delete('arrayData');
   configure({ browserRecycleRenders: 0 });
   await closeBrowser();

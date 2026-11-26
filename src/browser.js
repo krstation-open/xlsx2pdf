@@ -70,6 +70,10 @@ const config = {
   browserPath: undefined,
   /** puppeteer headless 模式，默认 'new' */
   headless: 'new',
+  /** 是否保留 Chromium 沙箱（默认 false = 传 --no-sandbox）。
+   *  容器/root 下沙箱通常不可用，故默认关闭；高安全部署在以非 root 运行、
+   *  且内核启用 user namespace 时可设 true 收窄攻击面 */
+  browserSandbox: false,
   /** 追加的浏览器启动参数 */
   launchArgs: [],
   /** 自定义标记语法匹配正则（全局默认；调用级 option.markerRegex 优先） */
@@ -107,10 +111,20 @@ const config = {
   batchSize: 10,
   /** 守护后端模式：auto（spawn 允许→sidecar，否则 local）/ local / sidecar；商业版消费 */
   guardMode: 'auto',
+  /** sidecar 入口产物路径（打包器把 sidecar-entry 挪出包体/拍进宿主单文件后显式指定；
+   *  空 = 按 src 直跑与 dist 候选自动探测；商业版消费） */
+  sidecarEntry: undefined,
+  /** sidecar 子进程的 V8 堆上限 MB（-1 = 按容器规格自动推导；0 = 不设；n = 固定）。
+   *  不设上限时 sidecar 会一路涨到被内核选中，而那时宿主上的其它服务早已被挤死；
+   *  设上限后 V8 在 JS 层分配失败、进程自行退出，宿主始终留有存活空间。
+   *  只约束 V8 堆，堆外 Buffer/external 仍由 RSS 巡检与 cgroup 兜底；商业版消费 */
+  sidecarHeapLimitMB: -1,
   /** 模板跨调用缓存预算 MB（0 关闭；opt-in 有界 LRU，key=路径+mtime+size / URL+TTL） */
   templateCacheMB: 0,
   /** 批产物磁盘 spill 阈值 MB：累计批 PDF 超阈即落盘（0 关闭；商业版消费） */
   spillThresholdMB: 0,
+  /** 单请求 spill 累计上限 MB：超限中止并报 E_SPILL（0 = 不限；商业版消费） */
+  spillMaxMB: 0,
   /** sidecar 准入队列上限（0 = 自动：4×maxConcurrency 且不低于 16；商业版消费） */
   maxAdmitQueue: 0,
   /** merge 线程池大小（-1 = 自动；0 = 关闭走主线程；n>0 = 固定池；商业版消费） */
@@ -175,7 +189,7 @@ export function warnResourceRisk(maxCells, maxTemplateSize) {
 /**
  * 配置浏览器行为（模块级单例；closeBrowser 后下次启动按新配置重建）
  *
- * 社区版恒接受：browserPath / headless / launchArgs / markerRegex / markerSeparator /
+ * 社区版恒接受：browserPath / headless / browserSandbox / launchArgs / markerRegex / markerSeparator /
  * maxConcurrency / maxCells / maxTemplateSize / browserIdleMs / browserMaxAgeMs /
  * browserRecycleRenders / protocolTimeoutMs / onEvent / markerAliases；
  * 其余键（memoryGuard/maxPages/fontGuard/pageRotate 等）须由商业版经接缝声明后才接受，
@@ -184,6 +198,7 @@ export function warnResourceRisk(maxCells, maxTemplateSize) {
  * @param {Object} [option]
  * @param {string} [option.browserPath] - 外部浏览器可执行文件路径
  * @param {boolean|'new'} [option.headless] - 无头模式
+ * @param {boolean} [option.browserSandbox] - 是否保留 Chromium 沙箱（默认 false；容器/root 下沙箱不可用，高安全且以非 root 运行时设 true）
  * @param {string[]} [option.launchArgs] - 追加启动参数
  * @param {RegExp} [option.markerRegex] - 自定义标记语法匹配正则（全局默认，调用级优先；传 null 恢复内置 ${...}）
  * @param {string} [option.markerSeparator] - 标记内部分隔符（全局默认，默认 "|"，调用级优先；传 null 恢复默认）
@@ -202,6 +217,8 @@ export function configure(option = {}) {
   if (option.browserPath !== undefined) config.browserPath = option.browserPath;
   if (option.headless !== undefined) config.headless = option.headless;
   if (option.launchArgs !== undefined) config.launchArgs = [...option.launchArgs];
+  // 浏览器沙箱：默认关闭（容器/root 下不可用），仅显式 true 时移除 --no-sandbox
+  if (option.browserSandbox !== undefined) config.browserSandbox = !!option.browserSandbox;
   // 标记语法为社区版扩展能力，恒接受（契约校验在引擎使用处 validateMarkerRegex）
   if (option.markerRegex !== undefined) config.markerRegex = option.markerRegex;
   if (option.markerSeparator !== undefined) config.markerSeparator = option.markerSeparator;
@@ -311,13 +328,17 @@ export function configure(option = {}) {
   }
   // 守护自治参数化键（商业版声明后接受；非负整数类统一校验；
   // browserIdleMs/browserMaxAgeMs/browserRecycleRenders 已下放社区版恒接受，不在此列）
-  for (const key of ['maxPages', 'templateCacheMB', 'spillThresholdMB']) {
+  for (const key of ['maxPages', 'templateCacheMB', 'spillThresholdMB', 'spillMaxMB']) {
     if (accepted.has(key) && option[key] !== undefined) {
       const v = option[key];
       if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+        // MB 类键（模板缓存 / spill 阈值与上限）的最小粒度是 1MB：0.2 这类小数
+        // 无法表达（向下取整会变成 0 = 关闭），直接拒绝并点明单位与粒度，
+        // 避免用户以为小阈值已经生效
+        const inMB = key !== 'maxPages';
         throw xlsxError('E_OPTION_INVALID',
-          `[xlsx2pdf] configure({ ${key} }) 只接受非负整数（0 关闭），收到：${JSON.stringify(v)}`,
-          `configure({ ${key} }) accepts a non-negative integer only (0 disables), received: ${JSON.stringify(v)}.`);
+          `[xlsx2pdf] configure({ ${key} }) 只接受非负整数${inMB ? '（单位 MB，最小粒度 1MB）' : '（单位页）'}（0 关闭），收到：${JSON.stringify(v)}`,
+          `configure({ ${key} }) accepts a non-negative integer only${inMB ? ' in whole MB (smallest step 1MB)' : ' in pages'} (0 disables), received: ${JSON.stringify(v)}.`);
       }
       config[key] = v;
     }
@@ -340,6 +361,24 @@ export function configure(option = {}) {
     }
     config.guardMode = option.guardMode;
   }
+  if (accepted.has('sidecarEntry') && option.sidecarEntry !== undefined) {
+    const v = option.sidecarEntry;
+    if (v !== null && typeof v !== 'string') {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] configure({ sidecarEntry }) 只接受字符串路径或 null（清空回落自动探测），收到：${JSON.stringify(v)}`,
+        `configure({ sidecarEntry }) accepts a string path or null (clear back to auto-detect) only, received: ${JSON.stringify(v)}.`);
+    }
+    config.sidecarEntry = v || undefined;
+  }
+  if (accepted.has('sidecarHeapLimitMB') && option.sidecarHeapLimitMB !== undefined) {
+    const v = option.sidecarHeapLimitMB;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < -1) {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] configure({ sidecarHeapLimitMB }) 只接受 -1（自动推导）或非负整数（0 = 不设），收到：${JSON.stringify(v)}`,
+        `configure({ sidecarHeapLimitMB }) accepts -1 (auto) or a non-negative integer (0 = unlimited), received: ${JSON.stringify(v)}.`);
+    }
+    config.sidecarHeapLimitMB = v;
+  }
   // 并发预算参数化（商业版声明后接受）：准入队列上限 / merge 池规模与排队预算。
   // mergeWorkers 允许 -1（自动），其余均为非负整数（0 关闭/不排队）
   if (accepted.has('maxAdmitQueue') && option.maxAdmitQueue !== undefined) {
@@ -350,6 +389,17 @@ export function configure(option = {}) {
         `configure({ maxAdmitQueue }) accepts a non-negative integer only (0 = auto), received: ${JSON.stringify(v)}.`);
     }
     config.maxAdmitQueue = v;
+  }
+  // 批次渲染队列上限（与请求级准入队列解耦；容量 = 请求并发 × 每请求批数）：
+  // 非负整数，0 = 自动（商业版按 max(64, 并发×16) 推导，并随准入 RPC 上报给共享 sidecar）
+  if (accepted.has('renderQueueMax') && option.renderQueueMax !== undefined) {
+    const v = option.renderQueueMax;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+      throw xlsxError('E_OPTION_INVALID',
+        `[xlsx2pdf] configure({ renderQueueMax }) 只接受非负整数（0 自动），收到：${JSON.stringify(v)}`,
+        `configure({ renderQueueMax }) accepts a non-negative integer only (0 = auto), received: ${JSON.stringify(v)}.`);
+    }
+    config.renderQueueMax = v;
   }
   if (accepted.has('mergeWorkers') && option.mergeWorkers !== undefined) {
     const v = option.mergeWorkers;

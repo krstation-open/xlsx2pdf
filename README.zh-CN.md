@@ -867,6 +867,7 @@ import { configure } from 'xlsx2pdf';
 configure({
   browserPath: '/usr/bin/chromium', // 外部浏览器（优先于内置与环境变量 XLSX2PDF_BROWSER_PATH）
   headless: 'new', // 默认 'new'
+  browserSandbox: false, // 默认 false（传 --no-sandbox，容器/root 下必须）；以非 root 运行且内核启用 user namespace 时可设 true
   launchArgs: ['--proxy-server=...'], // 追加启动参数
   markerRegex: /\{\{([^}]+)\}\}/g, // 全局默认标记语法（传 null 恢复内置 ${...}）
   markerSeparator: '::', // 全局默认标记内部分隔符（传 null 恢复竖杠）
@@ -886,6 +887,7 @@ configure({
 | :---------------- | :----------------- | :------------ | :----------------------------------------------------------------------------- |
 | `browserPath`     | `string`           | 无            | 外部浏览器可执行文件路径，优先于内置与环境变量                                 |
 | `headless`        | `boolean \| 'new'` | `'new'`       | puppeteer 无头模式                                                             |
+| `browserSandbox`  | `boolean`          | `false`       | 是否保留 Chromium 沙箱；默认关闭（容器/root 下带沙箱无法启动）                  |
 | `launchArgs`      | `string[]`         | `[]`          | 追加的浏览器启动参数                                                           |
 | `markerRegex`     | `RegExp \| null`   | 内置 `${...}` | 全局标记语法，调用级 option 优先；`null` 恢复内置                              |
 | `markerSeparator` | `string \| null`   | `'\|'`        | 全局标记内部分隔符，调用级优先；`null` 恢复默认                                |

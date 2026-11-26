@@ -18,6 +18,21 @@ import { normalizeImageSizes } from './image.js';
 import { resolveCoreMdw } from './mdw.js';
 import { xlsxError, isCodedError, throwIfAborted } from './errors.js';
 
+/** 单个 zip 条目解压上限：styles/sharedStrings 等小条目远低于此值，超限按畸形/解压炸弹处理 */
+const MAX_ZIP_ENTRY_BYTES = 64 * 1024 * 1024;
+
+/**
+ * 体积格式化：MB 级保留 1 位小数，KB 级四舍五入取整。
+ * 守卫上限的最小粒度是 1KB，统一按 MB 取整会把 1KB 上限显示成「0MB」，
+ * 报错文案必须能反映真实阈值
+ * @param {number} bytes - 字节数
+ * @returns {string} 人类可读体积（如 900KB / 5.0MB）
+ */
+function fmtSize(bytes) {
+  const n = Number(bytes) > 0 ? Number(bytes) : 0;
+  return n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`;
+}
+
 /**
  * 定位 zip 条目并返回压缩块（中央目录解析，不解压）
  * @param {Buffer} buf - xlsx 文件内容
@@ -61,7 +76,14 @@ export function locateZipEntry(buf, entryName) {
 export function unzipEntryToString(buf, entryName) {
   const entry = locateZipEntry(buf, entryName);
   if (!entry) return null;
-  return entry.method === 8 ? zlib.inflateRawSync(entry.raw).toString('utf8') : entry.raw.toString('utf8');
+  if (entry.method !== 8) return entry.raw.toString('utf8');
+  // 解压上限：小条目（styles/sharedStrings）用不到这么大，超限必然是畸形/解压炸弹。
+  // 无上限时一个几十 KB 的压缩条目可以在 inflate 阶段把进程内存撑到几 GB
+  try {
+    return zlib.inflateRawSync(entry.raw, { maxOutputLength: MAX_ZIP_ENTRY_BYTES }).toString('utf8');
+  } catch (_) {
+    return null; // 同 streamZipEntryText：条目不可读交后续流程报真实错误
+  }
 }
 
 /**
@@ -294,9 +316,9 @@ export async function parseTemplateSkeleton(templateSource, option = {}) {
   const maxSize = option.maxTemplateSize;
   if (maxSize > 0 && buffer.length > maxSize) {
     throw xlsxError('E_SIZE_CAP',
-      `[xlsx2pdf] 模板文件过大：${(buffer.length / 1024 / 1024).toFixed(1)}MB，超过上限 ${(maxSize / 1024 / 1024).toFixed(0)}MB。` +
+      `[xlsx2pdf] 模板文件过大：${fmtSize(buffer.length)}，超过上限 ${fmtSize(maxSize)}。` +
       '单页渲染无法承载超大模板（产物必被裁剪），请拆分数据分批生成。',
-      `Template file too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB exceeds the ${(maxSize / 1024 / 1024).toFixed(0)}MB cap. ` +
+      `Template file too large: ${fmtSize(buffer.length)} exceeds the ${fmtSize(maxSize)} cap. ` +
       'Single-page rendering cannot carry oversized templates (output would be clipped); split the data and generate in batches.');
   }
 
@@ -318,6 +340,11 @@ export async function parseTemplateSkeleton(templateSource, option = {}) {
     }
   }
 
+  // 加载后实测复核（接缝）：体积与格数都只是规模代理量，推不出真实开销——
+  // 实测 2.7MB/2 万格几乎零增量，20.8MB/18 万格要 541MB。加载完成是唯一能测准的
+  // 时刻，且此时只有模型在堆里、Chrome 尚未启动，拒绝的代价仅一次解析
+  const loadProbe = getSeams().afterTemplateLoad;
+  const memBefore = loadProbe ? process.memoryUsage() : null;
   const workbook = new ExcelJS.Workbook();
   try {
     await workbook.xlsx.load(buffer);
@@ -326,6 +353,15 @@ export async function parseTemplateSkeleton(templateSource, option = {}) {
     throw xlsxError('E_TEMPLATE_LOAD',
       `[xlsx2pdf] 模板解析失败（不是有效的 xlsx 文件或已损坏）：${err.message}`,
       `Failed to parse the template (not a valid xlsx file, or corrupted): ${err.message}`);
+  }
+  // 放在 catch 之外：接缝抛出的 E_MEMORY 不能被包成 E_TEMPLATE_LOAD
+  if (memBefore) {
+    const memAfter = process.memoryUsage();
+    await loadProbe({
+      bytes: buffer.length,
+      heapDeltaMB: (memAfter.heapUsed - memBefore.heapUsed) / (1024 * 1024),
+      rssDeltaMB: (memAfter.rss - memBefore.rss) / (1024 * 1024),
+    });
   }
   const worksheet = workbook.worksheets[0];
   if (!worksheet) {

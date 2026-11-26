@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- `configure({ browserSandbox: true })` keeps the Chromium sandbox. The launch args used to hardcode `--no-sandbox` / `--disable-setuid-sandbox`, which is required inside containers running as root but leaves no way to narrow the surface for a hardened deployment. The default stays off (same behavior as before); turn it on when running as non-root with user namespaces available.
+- `npm run test:security` (`test/security-injection.mjs`): locks the data-plane defenses (strict data URL + re-encode, `<img src>` attribute escaping, color / alignment whitelists, CSP meta) on both `src` and the built `dist` via a real template export.
+
 ### Documentation
 
 - README (zh-CN / EN) gains a "How it works" chapter: the five-step template → PDF pipeline and its guards, marker segmentation and rich-text inheritance, Excel's MDW column-width formula with the built-in heuristic tables, numFmt resolution for static and marker cells, image validation / normalization / caching, and the render semaphore with browser lifecycle.

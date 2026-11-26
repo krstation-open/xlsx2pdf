@@ -183,6 +183,8 @@ export interface BrowserOptions {
   browserPath?: string;
   /** puppeteer headless 模式，默认 'new' */
   headless?: boolean | 'new';
+  /** 是否保留 Chromium 沙箱（默认 false = 传 --no-sandbox）；以非 root 运行且内核启用 user namespace 时可设 true */
+  browserSandbox?: boolean;
   /** 追加的浏览器启动参数 */
   launchArgs?: string[];
   /** 自定义标记语法匹配正则（全局默认；传 null 恢复内置 ${...}） */
@@ -210,6 +212,12 @@ export interface BrowserOptions {
   browserRecycleRenders?: number;
   /** puppeteer protocolTimeout ms（≥1000 整数，默认 60000：CDP 调用挂起上限） */
   protocolTimeoutMs?: number;
+  /**
+   * sidecar 子进程的 V8 堆上限 MB（商业版 sidecar 链路消费；本版只做配置校验与透传）。
+   * -1 自动推导（钳在 [512, 8192]）、0 不设、正整数固定；违约抛 E_OPTION_INVALID。
+   * 只在子进程 spawn 时刻生效；Buffer/external 在 V8 堆外，仍靠 RSS 巡检与容器 cgroup 兜底。
+   */
+  sidecarHeapLimitMB?: number;
   /**
    * 渲染事件钩子（1.7.0 起社区版可观测性入口）：桥接 8 个阶段事件
    * （html/render/merge/rotate/done/render.wait/render.chrome/render.print）。

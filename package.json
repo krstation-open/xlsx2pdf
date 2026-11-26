@@ -56,6 +56,7 @@
     "test:concurrency": "node test/concurrency-option-guard.mjs",
     "test:boundary": "node test/scale-guard.mjs && node test/lifecycle-guard.mjs && node test/emptyrow-guard.mjs && node test/onevent-guard.mjs && node test/watermark-guard.mjs && node test/resource-param-guard.mjs && node test/alias-guard.mjs",
     "test:batch": "node test/batch-seam-guard.mjs",
+    "test:security": "node test/security-injection.mjs",
     "test:cli": "node test/cli-guard.mjs",
     "example": "node examples/basic.mjs",
     "prepare": "husky"

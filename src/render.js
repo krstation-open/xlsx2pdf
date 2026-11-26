@@ -202,6 +202,9 @@ export function renderHtml(model, option = {}) {
 <html>
 <head>
 <meta charset="utf-8">
+<!-- 渲染产物兜底策略：脚本仍需内联执行（自适应/度量），但网络外连与表单提交一律禁止，
+     降低数据面被注入后把工作簿内容外带的可能 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src * data: blob: file:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src * data: file:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 ${preamble ? `<script>\n${preamble}\n</script>\n` : ''}<style>
   @page { size: ${page.widthMm}mm ${page.heightMm}mm; margin: ${margin.top}mm ${margin.right}mm ${margin.bottom}mm ${margin.left}mm; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -534,14 +537,15 @@ function buildCellHtml(cell, scale, roomWidth = 0, minFontPx = 6) {
     }
 
     if (cell.font?.color) {
-        styles.push(`color:#${cell.font.color.replace(/^FF/, '')}`);
+        const color = normalizeColor(cell.font.color);
+        if (color) styles.push(`color:${color}`);
     }
 
-    // 对齐
-    const halign = cell.alignment?.horizontal || 'left';
-    const valign = cell.alignment?.vertical || 'top';
+    // 对齐：仅接受 CSS 合法值，非法/未知值回退到历史默认，避免把模板字符串直接拼进样式表
+    const halign = normalizeHAlign(cell.alignment?.horizontal);
+    const valign = normalizeVAlign(cell.alignment?.vertical);
     styles.push(`text-align:${halign}`);
-    styles.push(`vertical-align:${valign === 'middle' ? 'middle' : valign}`);
+    styles.push(`vertical-align:${valign}`);
 
     // 换行 / 字体自动缩放：二者在 Excel UI 中互斥，模板里同时置位时以「换行」为准，
     // 否则会被强制单行并裁剪，换行效果丢失（换行格同样会缩字号，由自适应脚本处理）
@@ -561,7 +565,7 @@ function buildCellHtml(cell, scale, roomWidth = 0, minFontPx = 6) {
             if (b && b.style) {
                 const cssStyle = BORDER_STYLE_MAP[b.style] || 'solid';
                 const width = BORDER_WIDTH_MAP[b.style] || 0.5;
-                const color = b.color?.argb ? `#${b.color.argb.replace(/^FF/, '')}` : '#000000';
+                const color = normalizeColor(b.color?.argb) || '#000000';
                 styles.push(`border-${side}:${width}pt ${cssStyle} ${color}`);
             }
         }
@@ -569,7 +573,8 @@ function buildCellHtml(cell, scale, roomWidth = 0, minFontPx = 6) {
 
     // 背景色
     if (cell.fill?.fgColor) {
-        styles.push(`background-color:#${cell.fill.fgColor.replace(/^FF/, '')}`);
+        const color = normalizeColor(cell.fill.fgColor);
+        if (color) styles.push(`background-color:${color}`);
     }
 
     // 下划线策略：纯文本格或用 border-bottom 占满单元格；多段文本格只有在存在
@@ -610,7 +615,8 @@ function buildCellHtml(cell, scale, roomWidth = 0, minFontPx = 6) {
             }
 
             // 标签之间不留空白：td 若带 pre-wrap，缩进换行会被当作真实文本渲染，把图片顶下一行
-            imgHtml += `<div class="img-wrapper" style="left:${ox}px;top:${oy}px;width:${iw}px;height:${ih}px;z-index:${zi}${opCss}"><img src="${img.dataUrl}" style="width:100%;height:100%" /></div>`;
+            // dataUrl 是外部数据的最终落点：属性值必须转义，否则值里的引号可跳出 src 属性注入事件处理器
+            imgHtml += `<div class="img-wrapper" style="left:${ox}px;top:${oy}px;width:${iw}px;height:${ih}px;z-index:${zi}${opCss}"><img src="${escapeAttr(img.dataUrl)}" style="width:100%;height:100%" /></div>`;
         }
     }
 
@@ -646,7 +652,7 @@ function buildCellHtml(cell, scale, roomWidth = 0, minFontPx = 6) {
     if (useTdUnderline) {
         // 仅在单元格没有显式底边框时添加下划线边框
         if (!cell.border?.bottom) {
-            const underlineColor = cell.font?.color ? `#${cell.font.color.replace(/^FF/, '')}` : '#000000';
+            const underlineColor = normalizeColor(cell.font?.color) || '#000000';
             styles.push(`border-bottom:0.5pt solid ${underlineColor}`);
         }
     }
@@ -699,7 +705,10 @@ function buildSegmentHtml(seg, cell, scale, useTdUnderline = false) {
     if (resolvedUnderline && !useTdUnderline) deco.push('underline');
     if (resolvedStrike) deco.push('line-through');
     if (deco.length) parts.push(`text-decoration:${deco.join(' ')}`);
-    if (seg.color) parts.push(`color:${seg.color}`);
+    if (seg.color) {
+        const color = normalizeColor(seg.color);
+        if (color) parts.push(`color:${color}`);
+    }
     if (seg.size > 0) {
         parts.push(`font-size:${Math.max(1, Math.round(seg.size * 1.333 * scale))}px`);
     } else if (styled && cell.font?.size > 0) {
@@ -728,7 +737,7 @@ function clampOpacity(value) {
 }
 
 /**
- * HTML 转义
+ * HTML 文本转义
  */
 function escapeHtml(str) {
     return String(str)
@@ -736,4 +745,44 @@ function escapeHtml(str) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+}
+
+/**
+ * HTML 属性值转义：文本转义之外再处理单引号，属性统一用双引号包裹。
+ * 用于 dataUrl 这类外部数据直接落进属性的位置。
+ */
+function escapeAttr(str) {
+    return escapeHtml(str).replace(/'/g, '&#39;');
+}
+
+/**
+ * 颜色白名单：接受 6 位 RRGGBB 或 8 位 AARRGGBB（ExcelJS 常见形式），
+ * 只有 8 位才剥离前两位 alpha；不合法返回 null 由调用方回退默认色。
+ * 历史实现无条件 replace(/^FF/)，会把 6 位里以 FF 开头的颜色截成 4 位。
+ * @param {string} [value]
+ * @returns {string|null} '#rrggbb'
+ */
+function normalizeColor(value) {
+    if (!value) return null;
+    let hex = String(value).trim().replace(/^#/, '');
+    if (/^[0-9a-fA-F]{8}$/.test(hex)) hex = hex.slice(2);
+    return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
+}
+
+/**
+ * 水平对齐白名单：只放行 CSS 认识的值，其余（如 centerContinuous）回退 left，
+ * 与历史“直出非法值、浏览器按初始值处理”的渲染结果一致。
+ */
+function normalizeHAlign(value) {
+    const v = String(value || '').toLowerCase();
+    return ['left', 'center', 'right', 'justify', 'start', 'end'].includes(v) ? v : 'left';
+}
+
+/** 垂直对齐白名单：合法值原样；Excel 的 distributed/justify 映射为 middle（同旧声明无效时的 td 默认）；其余回退 top（历史默认） */
+function normalizeVAlign(value) {
+    const v = String(value || '').toLowerCase();
+    // Excel 的「分散/两端对齐」在 CSS 垂直方向没有对应值。旧实现直接拼接会产出非法声明，
+    // 浏览器忽略后按 `td { vertical-align: middle }` 渲染；这里显式映射为 middle，保持历史观感
+    if (v === 'distributed' || v === 'justify') return 'middle';
+    return ['top', 'middle', 'bottom'].includes(v) ? v : 'top';
 }

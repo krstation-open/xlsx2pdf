@@ -241,6 +241,7 @@ async function buildHtml({ template, data, option = {} }) {
   const skeleton = await parseTemplateSkeleton(template, engineOpts);
 
   const pages = [];
+  let handled = 0;
   for (const item of dataItems) {
     // 逐页取消检查：多页批量中途 abort 不再继续后续页
     throwIfAborted(option.signal);
@@ -249,10 +250,34 @@ async function buildHtml({ template, data, option = {} }) {
     // 页面设置统一解析：用户 > 模板 pageSetup > Excel 内建默认（见 pagesetup.js）
     const setup = resolvePageSetup(model, option);
     pages.push({ model, ...setup });
+
+    // 逐页填充是主线程 CPU 密集型，await 微任务不让出宏任务：连续多页会把
+    // abort 定时器/租约心跳推迟（压测实测 40 页并发下推迟最高 587ms）。
+    // 每 YIELD_PAGES 页让出一轮事件循环，取消与心跳及时执行；
+    // 让出期间 abort 可能已经触发，恢复后必须重新检查，否则已取消请求会继续跑完
+    if (++handled % YIELD_PAGES === 0) {
+      await yieldToLoop();
+      throwIfAborted(option.signal);
+    }
   }
 
   return { pages, warnings };
 }
+
+/**
+ * 让出一轮事件循环（宏任务）：让 abort 定时器/租约心跳/其它请求得到执行。
+ * 纯 await 只跑微任务队列，定时器仍会被推迟，故用 setImmediate。
+ */
+const yieldToLoop = () => new Promise((resolve) => { setImmediate(resolve); });
+/**
+ * 每处理多少页让出一次。
+ *
+ * 口径：一轮宏任务里会连续恢复所有在途请求的让出点（8 并发 × 每段页数 ×
+ * 单页填充耗时 ≈ 阻塞窗口）。实测每页约 15ms，取 4 页时 8 并发下仍有
+ * 约 0.5s 连续阻塞（定时器/取消被推迟）；取 1 页把窗口压到 ~120ms，
+ * 而 2000 页只多 2000 次事件循环轮询（量级 <0.5s，对分钟级任务可忽略）
+ */
+const YIELD_PAGES = 1;
 
 /**
  * 把一组页面拼装为完整 HTML 文档（单页走 renderHtml；多页逐页 fragment +
@@ -261,9 +286,11 @@ async function buildHtml({ template, data, option = {} }) {
  *
  * @param {Array} pages - buildHtml 的逐页解析结果（model + 页面设置）
  * @param {Object} option - 用户原始 option（取 scale 与渲染行为类参数）
- * @returns {string} HTML 字符串
+ * @returns {Promise<string>} HTML 字符串（分片拼装，期间会让出事件循环）
  */
-function assembleHtml(pages, option) {
+async function assembleHtml(pages, option) {
+  // 进入拼装前先复核取消：buildHtml 让出期间 abort 可能已经触发
+  throwIfAborted(option.signal);
   // 仅含渲染行为类参数；页面设置类逐页从解析结果取（多页可各自不同）
   const renderOpts = {
     fitToPage: option.fitToPage,
@@ -300,7 +327,14 @@ function assembleHtml(pages, option) {
     } else {
       fragments.push(`<div style="page-break-before: always;"></div>${renderTableFragment(p.model, pageOpts)}`);
     }
+    // 大页数拼装是同步 CPU 段：定期让出，避免 160p/2000p 批量把取消定时器拖住；
+    // 让出后重新检查取消，避免已取消请求继续拼完剩余页
+    if ((i + 1) % YIELD_PAGES === 0) {
+      await yieldToLoop();
+      throwIfAborted(option.signal);
+    }
   }
+  throwIfAborted(option.signal);
   return `${head}\n${fragments.join('\n')}\n</body>\n</html>`;
 }
 
@@ -420,7 +454,8 @@ async function generatePdf({ template, data, option, seams, pageRotate, t0 }) {
     // 批产物收集器（商业版磁盘 spill）：超阈落盘，Node 堆与页数解耦；缺省内存数组
     const store = seams.createBatchStore ? seams.createBatchStore() : null;
     const buffers = store ? null : [];
-    await Promise.all(batches.map(async (batch, bi) => {
+    // 保存任务句柄：Promise.all 首个失败即拒绝，但其余批仍在渲染并写收集器
+    const tasks = batches.map(async (batch, bi) => {
       // 逐批取消检查：abort 后未启动的批不再进入渲染（在途批由 htmlToPdf 内部竞态中断）
       throwIfAborted(option.signal);
       const first = batch[0];
@@ -442,22 +477,30 @@ async function generatePdf({ template, data, option, seams, pageRotate, t0 }) {
       // 内存数组同样按索引落位，否则 push 得到的是完成序、合并后页序错乱；
       // add 允许返回 Promise（磁盘 spill 异步写），此处 await 保证合并前数据就位
       if (store) await store.add(rendered.buffer, bi); else buffers[bi] = rendered.buffer;
-    }));
-    // 告警按批序聚合（Promise.all 完成序不确定，不直接 push 避免告警顺序漂移）
-    for (const w of batchWarnings) warnings.push(...(w || []));
-    // 合并层单 pass：rotate=true 时 copyPages 后就地补 /Rotate，省一次全量 parse+save
-    const tM = Date.now();
-    pdf = await seams.mergePdf(store ? store.source() : buffers, { rotate: pageRotate && hasLandscapeGeometry });
-    emit('merge', { ms: Date.now() - tM, bytes: pdf.length, batches: batches.length });
-    if (store && store.dispose) await store.dispose();
+    });
+    try {
+      await Promise.all(tasks);
+      // 告警按批序聚合（Promise.all 完成序不确定，不直接 push 避免告警顺序漂移）
+      for (const w of batchWarnings) warnings.push(...(w || []));
+      // 合并层单 pass：rotate=true 时 copyPages 后就地补 /Rotate，省一次全量 parse+save
+      const tM = Date.now();
+      pdf = await seams.mergePdf(store ? store.source() : buffers, { rotate: pageRotate && hasLandscapeGeometry });
+      emit('merge', { ms: Date.now() - tM, bytes: pdf.length, batches: batches.length });
+    } finally {
+      // 失败时 Promise.all 提前拒绝，其余批仍在写收集器：等它们全部结束后再释放，
+      // 否则会出现 dispose 之后仍有 add() 写入（spill 实现会重建目录且无人清理）。
+      // allSettled 不抛错，原始错误继续向上传播；清理失败同样不得覆盖原始错误
+      await Promise.allSettled(tasks);
+      if (store && store.dispose) { try { await store.dispose(); } catch (_) { /* 清理尽力而为 */ } }
+    }
     // 全量 HTML 仅供返回：出片完成后才拼；拼完即释放 pages/batches，
     // rotate/返回期峰值不再叠加 Σmodel
-    html = assembleHtml(pages, option);
+    html = await assembleHtml(pages, option);
     pages.length = 0;
     batches.length = 0;
   } else {
     const firstPage = pages[0];
-    html = assembleHtml(pages, option);
+    html = await assembleHtml(pages, option);
     const tR = Date.now();
     const rendered = await htmlToPdf(html, {
       pageSize: firstPage.pageSize,
@@ -498,7 +541,7 @@ export async function excel2html({ template, data, option = {} }) {
       `[xlsx2pdf] 产出页数超上限：解析得 ${pages.length} 页，超过 maxPages=${maxPages}，请拆分请求`,
       `Output page cap exceeded: parsed ${pages.length} pages, over maxPages=${maxPages}; split the request.`);
   }
-  return { html: assembleHtml(pages, option), warnings };
+  return { html: await assembleHtml(pages, option), warnings };
 }
 
 /**

@@ -101,8 +101,9 @@ async function getBrowser() {
         pipe: true,
         protocolTimeout: cfg.protocolTimeoutMs,
         args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
+          // 沙箱默认关闭：容器里以 root 运行时 Chromium 拒绝带沙箱启动。
+          // 非 root + user namespace 可用的高安全部署用 configure({ browserSandbox: true }) 打开
+          ...(cfg.browserSandbox ? [] : ['--no-sandbox', '--disable-setuid-sandbox']),
           '--disable-dev-shm-usage',
           ...cfg.launchArgs,
         ],
@@ -239,6 +240,36 @@ function raceAbort(promise, signal) {
   });
 }
 
+/**
+ * 取消后在途打印的归还上限 ms：底层 CDP 打印可能挂到超时，额度不能永久挂账。
+ * 超过此窗口按「已结束」处理，宁可账面偏保守（提前放行一批）也不能泄漏额度。
+ */
+const PRINT_SETTLE_CAP_MS = 30000;
+
+/**
+ * 取消后的额度归还：等底层打印真正 settle（成功/失败/上限兜底）再归还。
+ *
+ * 取消只让调用方及时拿到 E_CANCELLED，pg.close() 并不会中断已发出的 CDP 打印，
+ * Chrome 里的打印/关页还在吃内存。此刻立即归还额度，下一批就会在旧打印仍占用时
+ * 被放行——账面早于实际，方向是超卖。计时器 unref，不阻碍进程退出。
+ *
+ * @param {Promise} settled 在途打印的 settle 信号（不会 reject）
+ * @param {Function} release 额度归还闭包（幂等）
+ * @param {number} capMs 兜底上限 ms
+ */
+export function releaseAfterSettle(settled, release, capMs) {
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    try { release(); } catch (_) { /* 归还不能击穿调用方 */ }
+  };
+  const timer = setTimeout(finish, capMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  Promise.resolve(settled).then(finish, finish);
+}
+
 // ============================================================
 // HTML → PDF
 // ============================================================
@@ -303,7 +334,8 @@ export async function htmlToPdf(html, option = {}) {
   // option.__localRender 为内部旁路：guardMode 运行期切 local 时客户端包装层
   // 回落本地路径用，跳过委托防递归（不构成公开 API）
   if (seams.renderBackend && !option.__localRender) {
-    const htmlStr = typeof html === 'function' ? html() : html;
+    // 工厂可返回 Promise：多页 HTML 分片拼装期间会让出事件循环（见 assembleHtml）
+    const htmlStr = await (typeof html === 'function' ? html() : html);
     try {
       return await seams.renderBackend(htmlStr, { ...option, pageCount });
     } catch (err) {
@@ -320,6 +352,8 @@ export async function htmlToPdf(html, option = {}) {
   let slotAcquired = false;
   let pg = null;
   let onAbort = null;
+  // 在途打印的 settle 信号（不 reject）：取消时交给归还方决定归还时机
+  let pendingPrint = null;
   try {
     throwIfAborted(signal);
     const tWait = Date.now();
@@ -327,8 +361,9 @@ export async function htmlToPdf(html, option = {}) {
     slotAcquired = true;
     emit('render.wait', { ms: Date.now() - tWait, pages: pageCount });
 
-    // HTML 惰性拼装：拿到准入与槽位后才调工厂，排队期间不占 Node 堆
-    const htmlStr = typeof html === 'function' ? html() : html;
+    // HTML 惰性拼装：拿到准入与槽位后才调工厂，排队期间不占 Node 堆；
+    // 工厂可返回 Promise（分片拼装让出事件循环），此处 await 兼容同步/异步两种工厂
+    const htmlStr = await (typeof html === 'function' ? html() : html);
 
     // getBrowser/newPage 失败（浏览器崩溃/协议超时等）同样纳入 E_RENDER 包装；
     // 已带码错误（E_BROWSER_* 等）原样重抛
@@ -389,7 +424,7 @@ export async function htmlToPdf(html, option = {}) {
     // puppeteer 返回 Uint8Array，统一转 Buffer（toString/subarray 等语义与类型声明一致）
     throwIfAborted(signal);
     const tPrint = Date.now();
-    const pdfBuffer = await raceAbort(pg.pdf({
+    const printPromise = pg.pdf({
       width: `${page.widthMm}mm`,
       height: `${page.heightMm}mm`,
       printBackground: true,
@@ -400,7 +435,10 @@ export async function htmlToPdf(html, option = {}) {
         left: `${margin.left}mm`,
       },
       preferCSSPageSize: false,
-    }), signal);
+    });
+    // 先登记 settle 再竞态：abort 可能在任何时刻到达，晚登记就漏掉这次在途打印
+    pendingPrint = printPromise.then(() => { }, () => { });
+    const pdfBuffer = await raceAbort(printPromise, signal);
     emit('render.print', { ms: Date.now() - tPrint, bytes: pdfBuffer.byteLength, pages: pageCount });
 
     throwIfAborted(signal);
@@ -410,7 +448,13 @@ export async function htmlToPdf(html, option = {}) {
   } catch (err) {
     // 取消优先：abort 引发的中断（含 pg.close 触发的 CDP 报错）统一 E_CANCELLED；
     // 其余已带码错误（浏览器启动/路径类等）原样重抛；页面渲染/出片失败统一 E_RENDER
-    if (signal && signal.aborted) throw cancelledError();
+    if (signal && signal.aborted) {
+      const cancelled = cancelledError();
+      // 取消时把在途打印的 settle 交给上层（Pro sidecar 服务端）排归还时机；
+      // 尚未进入打印阶段（null）则上层按立即归还处理
+      if (pendingPrint) cancelled.pendingSettled = pendingPrint;
+      throw cancelled;
+    }
     if (isCodedError(err)) throw err;
     throw xlsxError('E_RENDER',
       `[xlsx2pdf] 页面渲染失败：${err.message}`,
@@ -422,7 +466,14 @@ export async function htmlToPdf(html, option = {}) {
       try { await pg.close(); } catch (_) { /* ignore */ }
     }
     if (slotAcquired) releaseSlot();
-    releaseMemory();
+    if (signal && signal.aborted && pendingPrint && seams.memoryAdmit) {
+      // 取消：等到打印真正结束再归还内存额度（上限兜底），否则下一批会在
+      // 旧打印仍吃内存时被准入放行。无内存接缝时 releaseMemory 是空函数，
+      // 不花一个定时器（社区版取消路径保持零开销）
+      releaseAfterSettle(pendingPrint, releaseMemory, PRINT_SETTLE_CAP_MS);
+    } else {
+      releaseMemory();
+    }
     // 浏览器回收：Chrome 关标签页后不会立刻把内存还给 OS，重复大批量调用会
     // 棘轮式抬高基线。达到回收阈值且当前无在途渲染时关闭单例，下次调用冷启动
     // 重建（默认 0 关闭，1.7.0 起社区版可配；Pro 生产默认 20）。launchPromise 在途时
