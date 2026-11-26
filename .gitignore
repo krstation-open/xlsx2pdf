@@ -6,3 +6,7 @@ browsers/
 *.tgz
 test/output/
 examples/output/
+
+# 本地临时日志/脚本（不入源码库）
+tmp-*
+*.log
